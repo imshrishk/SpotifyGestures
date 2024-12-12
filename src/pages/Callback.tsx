@@ -11,6 +11,8 @@ const Callback: React.FC = () => {
   useEffect(() => {
     const initializeSession = async () => {
       try {
+        console.log('Current URL hash:', window.location.hash);
+
         const hash = window.location.hash
           .substring(1)
           .split('&')
@@ -19,6 +21,8 @@ const Callback: React.FC = () => {
             acc[key] = value;
             return acc;
           }, {} as { [key: string]: string });
+
+        console.log('Parsed hash object:', hash);  // Log the parsed object to verify token extraction
 
         if (!hash.access_token) {
           throw new Error('No access token received from Spotify');
@@ -32,9 +36,10 @@ const Callback: React.FC = () => {
         const user = await getCurrentUser();
         setUser(user);
 
-        // Clear hash from URL and navigate to player
+        // Clear hash from URL to prevent it from showing in the URL bar
         window.history.replaceState({}, document.title, window.location.pathname);
-        navigate('/player');
+        console.log('Redirecting to /player...');  // Log to verify navigation
+        navigate('/player');  // Trigger the navigation to the player page
       } catch (error) {
         console.error('Authentication error:', error);
         setError(error instanceof Error ? error.message : 'Failed to authenticate with Spotify');
