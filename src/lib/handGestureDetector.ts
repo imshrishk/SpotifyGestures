@@ -6,7 +6,7 @@ let lastGesture: string | null = null;
 let gestureTimeout: NodeJS.Timeout | null = null;
 
 // Minimum confidence threshold for gesture detection
-const CONFIDENCE_THRESHOLD = 0.3;
+const CONFIDENCE_THRESHOLD = 0.1;
 // Minimum time between gesture triggers (in milliseconds)
 const GESTURE_COOLDOWN = 1000;
 
