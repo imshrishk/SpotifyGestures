@@ -11,9 +11,7 @@ const Callback: React.FC = () => {
   useEffect(() => {
     const initializeSession = async () => {
       try {
-        // Extract access token from hash or search params
         const getAccessTokenFromLocation = () => {
-          // First try hash fragment
           if (window.location.hash) {
             const hashParams = window.location.hash
               .substring(1)
@@ -23,42 +21,26 @@ const Callback: React.FC = () => {
                 acc[key] = decodeURIComponent(value);
                 return acc;
               }, {} as Record<string, string>);
-
             return hashParams.access_token;
           }
-
-          // Then try search params (for potential future changes)
           const searchParams = new URLSearchParams(window.location.search);
           return searchParams.get('access_token');
         };
-
         const accessToken = getAccessTokenFromLocation();
-
         if (!accessToken) {
           throw new Error('No access token found in URL');
         }
-
-        console.log('Retrieved access token:', accessToken); // Debugging log
-
-        // Set token and initialize Spotify client
         setToken(accessToken);
         setAccessToken(accessToken);
-
-        // Fetch user profile
         const user = await getCurrentUser();
         setUser(user);
-
-        // Clear sensitive information from URL
         window.history.replaceState({}, document.title, window.location.pathname);
-
         navigate('/player');
       } catch (error) {
-        console.error('Authentication error:', error);
         setError(error instanceof Error ? error.message : 'Failed to authenticate with Spotify');
         navigate('/');
       }
     };
-
     initializeSession();
   }, [navigate, setToken, setUser, setError]);
 

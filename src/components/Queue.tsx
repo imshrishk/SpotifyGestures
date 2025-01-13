@@ -5,11 +5,11 @@ import { shufflePlaylist, toggleRepeat } from '../lib/spotify';
 import spotify from '../lib/spotify';
 
 type Track = {
-  id: string;
-  name: string;
-  artists: { name: string }[];
-  album: { name: string; images: { url: string }[] };
-  duration_ms?: number;
+  id;
+  name;
+  artists: { name }[];
+  album: { name; images: { url }[] };
+  duration_ms?;
 };
 
 const Queue: React.FC = () => {
@@ -25,10 +25,9 @@ const Queue: React.FC = () => {
         const response = await spotify.getMyRecentlyPlayedTracks({ limit: 20 });
         setRecentTracks(response.items.map(item => item.track));
       } catch (error) {
-        console.error('Failed to fetch recent tracks', error);
+        console.error(error);
       }
     };
-
     fetchRecentTracks();
   }, []);
 
@@ -39,7 +38,7 @@ const Queue: React.FC = () => {
       await shufflePlaylist(!isShuffled);
       setIsShuffled(!isShuffled);
     } catch (error) {
-      console.error('Failed to shuffle playlist', error);
+      console.error(error);
     }
   };
 
@@ -47,16 +46,15 @@ const Queue: React.FC = () => {
     const nextRepeatMode: ('off' | 'track' | 'context')[] = ['off', 'track', 'context'];
     const currentIndex = nextRepeatMode.indexOf(repeatMode);
     const newRepeatMode = nextRepeatMode[(currentIndex + 1) % nextRepeatMode.length];
-
     try {
       await toggleRepeat(newRepeatMode);
       setRepeatMode(newRepeatMode);
     } catch (error) {
-      console.error('Failed to toggle repeat', error);
+      console.error(error);
     }
   };
 
-  const formatDuration = (ms: number) => {
+  const formatDuration = (ms) => {
     const minutes = Math.floor(ms / 60000);
     const seconds = ((ms % 60000) / 1000).toFixed(0);
     return `${minutes}:${parseInt(seconds) < 10 ? '0' : ''}${seconds}`;
@@ -70,58 +68,38 @@ const Queue: React.FC = () => {
             <List className="w-5 h-5 text-gray-300" />
             <h2 className="text-lg font-semibold text-white">Tracks</h2>
           </div>
-          
           <div className="bg-gray-800 rounded-full p-1 flex items-center">
             <button
               onClick={() => setActiveTab('upcoming')}
-              className={`px-3 py-1 rounded-full text-sm transition-colors ${
-                activeTab === 'upcoming' 
-                  ? 'bg-green-500 text-white' 
-                  : 'text-gray-400 hover:text-white'
-              }`}
+              className={`px-3 py-1 rounded-full text-sm transition-colors ${activeTab === 'upcoming' ? 'bg-green-500 text-white' : 'text-gray-400 hover:text-white'}`}
             >
               Upcoming
             </button>
             <button
               onClick={() => setActiveTab('recent')}
-              className={`px-3 py-1 rounded-full text-sm transition-colors ${
-                activeTab === 'recent' 
-                  ? 'bg-green-500 text-white' 
-                  : 'text-gray-400 hover:text-white'
-              }`}
+              className={`px-3 py-1 rounded-full text-sm transition-colors ${activeTab === 'recent' ? 'bg-green-500 text-white' : 'text-gray-400 hover:text-white'}`}
             >
               Recent
             </button>
           </div>
         </div>
-        
         <div className="flex items-center gap-2">
-          <button 
+          <button
             onClick={handleShuffle}
-            className={`p-2 rounded-full transition-all ${
-              isShuffled 
-                ? 'bg-green-500 text-white' 
-                : 'text-gray-400 hover:bg-gray-700'
-            }`}
+            className={`p-2 rounded-full transition-all ${isShuffled ? 'bg-green-500 text-white' : 'text-gray-400 hover:bg-gray-700'}`}
             title="Shuffle Playlist"
           >
             <Shuffle className="w-5 h-5" />
           </button>
-          
-          <button 
+          <button
             onClick={handleRepeat}
-            className={`p-2 rounded-full transition-all ${
-              repeatMode !== 'off' 
-                ? 'bg-green-500 text-white' 
-                : 'text-gray-400 hover:bg-gray-700'
-            }`}
+            className={`p-2 rounded-full transition-all ${repeatMode !== 'off' ? 'bg-green-500 text-white' : 'text-gray-400 hover:bg-gray-700'}`}
             title={`Repeat: ${repeatMode}`}
           >
             <Repeat className={`w-5 h-5 ${repeatMode === 'track' ? 'fill-current' : ''}`} />
           </button>
         </div>
       </div>
-
       <div className="space-y-4 max-h-[500px] overflow-y-auto custom-scrollbar">
         {displayTracks.length === 0 ? (
           <div className="flex items-center justify-center text-gray-400 py-10">
@@ -157,7 +135,6 @@ const Queue: React.FC = () => {
           ))
         )}
       </div>
-
       {displayTracks.length > 20 && (
         <div className="text-center text-sm text-gray-500 mt-4">
           +{displayTracks.length - 20} more tracks

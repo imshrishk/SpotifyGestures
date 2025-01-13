@@ -10,7 +10,7 @@ interface User {
 interface SpotifyState {
   token: string | null;
   user: User | null;
-  currentTrack: any;
+  currentTrack: any | null;
   queue: any[];
   isPlaying: boolean;
   volume: number;
