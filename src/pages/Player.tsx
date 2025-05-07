@@ -1,117 +1,459 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import NowPlaying from '../components/NowPlaying';
 import Queue from '../components/Queue';
 import GestureControl from '../components/GestureControl';
 import UserProfile from '../components/UserProfile';
+import EnhancedLyricsDisplay from '../components/EnhancedLyricsDisplay';
+import PlayerCard from '../components/Recommendations';
+import TrackGenres from '../components/TrackGenres';
+import ExploreRecommendations from '../components/ExploreRecommendations';
 import useSpotifyStore from '../stores/useSpotifyStore';
-import { getCurrentTrack, getQueue } from '../lib/spotify';
-import { AlertCircle, Loader2, Moon, Sun } from 'lucide-react';
+import { getCurrentTrack, getQueue, playPause, nextTrack, previousTrack, setVolume, getAudioAnalysis } from '../lib/spotify';
+import { AlertCircle, Loader2, Music2, Keyboard, Sparkles } from 'lucide-react';
+import { extractDominantColor } from '../lib/colorExtractor';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const Player: React.FC = () => {
   const navigate = useNavigate();
-  const { token, user, error, setCurrentTrack, setQueue, setError, setIsPlaying } = useSpotifyStore();
+  const { 
+    token, 
+    user, 
+    error, 
+    currentTrack, 
+    setCurrentTrack, 
+    setQueue, 
+    setError, 
+    setIsPlaying, 
+    isPlaying, 
+    volume, 
+    setVolume: updateVolume,
+    setAudioFeatures,
+    setAudioAnalysis
+  } = useSpotifyStore();
   const [isLoading, setIsLoading] = useState(true);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [retryCount, setRetryCount] = useState(0);
-  const [darkMode, setDarkMode] = useState(false);
+  const [backgroundColor, setBackgroundColor] = useState<string>('#121212');
+  const [showLyrics, setShowLyrics] = useState(true);
+  const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
+  const [selectedGenre, setSelectedGenre] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<'standard' | 'explore'>('standard');
+  const albumArtRef = useRef<HTMLImageElement>(null);
+  const MAX_RETRIES = 3;
+
+  // Handle keyboard shortcuts
+  const handleKeyPress = useCallback((event: KeyboardEvent) => {
+    // Skip shortcuts if user is typing in an input field
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+      return;
+    }
+
+    switch (event.code) {
+      case 'Space': // Play/Pause
+        event.preventDefault();
+        playPause(!isPlaying);
+        setIsPlaying(!isPlaying);
+        break;
+      case 'ArrowRight': // Next track
+        nextTrack();
+        break;
+      case 'ArrowLeft': // Previous track
+        previousTrack();
+        break;
+      case 'ArrowUp': // Volume up
+        const newVolumeUp = Math.min(volume + 5, 100);
+        setVolume(newVolumeUp);
+        updateVolume(newVolumeUp);
+        break;
+      case 'ArrowDown': // Volume down
+        const newVolumeDown = Math.max(volume - 5, 0);
+        setVolume(newVolumeDown);
+        updateVolume(newVolumeDown);
+        break;
+      case 'KeyL': // Toggle lyrics
+        setShowLyrics(!showLyrics);
+        break;
+      case 'KeyK': // Show/hide keyboard shortcuts
+        setShowKeyboardShortcuts(!showKeyboardShortcuts);
+        break;
+    }
+  }, [isPlaying, setIsPlaying, volume, updateVolume, showLyrics, showKeyboardShortcuts]);
+
+  // Add keyboard event listeners
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [handleKeyPress]);
 
   useEffect(() => {
     if (!token || !user) {
       navigate('/');
       return;
     }
+
     const updatePlayerState = async () => {
       try {
+        // Only set loading state during initial load
+        if (isInitialLoad) {
+          setIsLoading(true);
+        }
+        
+        // We don't need to explicitly check token validity here
+        // as our API functions will handle that automatically
         const [trackResponse, queueResponse] = await Promise.all([
           getCurrentTrack(),
           getQueue(),
         ]);
+
         if (trackResponse?.item) {
           setCurrentTrack(trackResponse.item);
           setIsPlaying(trackResponse.is_playing);
           setError(null);
         } else {
+          // No track is playing, but this is not an error
           setCurrentTrack(null);
+          setIsPlaying(false);
+          setError(null);
         }
+
         if (queueResponse?.queue) {
           setQueue(queueResponse.queue);
         } else {
           setQueue([]);
         }
+
         setIsLoading(false);
+        setIsInitialLoad(false);
         setRetryCount(0);
       } catch (error) {
+        console.error('Error updating player state:', error);
         if (error instanceof Error) {
+          // If we get "Token expired" error, our token refresh logic will handle it
+          if (error.message === 'Token expired') {
+            // Don't show error to user, just wait for redirect
+            return;
+          }
           setError(error.message);
-        }
-        if (retryCount < 3) {
-          setRetryCount((prev) => prev + 1);
-          setError(`Reconnecting to Spotify... (Attempt ${retryCount + 1}/3)`);
         } else {
-          setError('Unable to connect to Spotify. Please check your connection and active device.');
+          setError('Failed to update player state');
         }
-        setIsLoading(false);
+        
+        if (retryCount < MAX_RETRIES) {
+          setRetryCount(prev => prev + 1);
+          // Exponential backoff for retries
+          setTimeout(updatePlayerState, Math.pow(2, retryCount) * 1000);
+        } else {
+          setIsLoading(false);
+          setIsInitialLoad(false);
+        }
       }
     };
+
     updatePlayerState();
     const interval = setInterval(updatePlayerState, 5000);
     return () => clearInterval(interval);
-  }, [token, user, navigate, setCurrentTrack, setQueue, setError, setIsPlaying, retryCount]);
+  }, [token, user, navigate, setCurrentTrack, setQueue, setError, setIsPlaying, retryCount, isInitialLoad]);
+
+  // Extract colors from album art when it changes
+  useEffect(() => {
+    const extractColors = async () => {
+      if (currentTrack?.album?.images?.[0]?.url) {
+        try {
+          const dominantColor = await extractDominantColor(currentTrack.album.images[0].url);
+          
+          if (dominantColor) {
+            const [r, g, b] = dominantColor;
+            setBackgroundColor(`rgb(${r}, ${g}, ${b})`);
+          }
+        } catch (error) {
+          console.error('Error extracting colors:', error);
+        }
+      }
+    };
+    
+    extractColors();
+  }, [currentTrack]);
+
+  // Fetch audio features when current track changes
+  useEffect(() => {
+    const fetchAudioData = async () => {
+      if (!currentTrack?.id || !token) return;
+      
+      try {
+        // Fetch audio features and analysis in one call
+        const audioData = await getAudioAnalysis(currentTrack.id);
+        
+        // We now always have some data structure even on errors
+        if (audioData) {
+          // Set audio features
+          setAudioFeatures({
+            energy: audioData.features?.energy ?? 0.5,
+            danceability: audioData.features?.danceability ?? 0.5,
+            valence: audioData.features?.valence ?? 0.5,
+            acousticness: audioData.features?.acousticness ?? 0.5,
+            tempo: audioData.features?.tempo ?? 120,
+            liveness: audioData.features?.liveness ?? 0.5,
+            speechiness: audioData.features?.speechiness ?? 0.5,
+            instrumentalness: audioData.features?.instrumentalness ?? 0.5
+          });
+          
+          // Set audio analysis
+          setAudioAnalysis({
+            beats: audioData.analysis?.beats ?? [],
+            bars: audioData.analysis?.bars ?? [],
+            tatums: audioData.analysis?.tatums ?? [],
+            sections: audioData.analysis?.sections ?? [],
+            segments: audioData.analysis?.segments ?? []
+          });
+        } else {
+          // Set default values instead of null
+          setAudioFeatures({
+            energy: 0.5,
+            danceability: 0.5,
+            valence: 0.5,
+            acousticness: 0.5,
+            tempo: 120,
+            liveness: 0.5,
+            speechiness: 0.5,
+            instrumentalness: 0.5
+          });
+          
+          setAudioAnalysis({
+            beats: [],
+            bars: [],
+            tatums: [],
+            sections: [],
+            segments: []
+          });
+        }
+      } catch (error) {
+        console.error('Error fetching audio data:', error);
+        // Set default values instead of null
+        setAudioFeatures({
+          energy: 0.5,
+          danceability: 0.5,
+          valence: 0.5,
+          acousticness: 0.5,
+          tempo: 120,
+          liveness: 0.5,
+          speechiness: 0.5,
+          instrumentalness: 0.5
+        });
+        
+        setAudioAnalysis({
+          beats: [],
+          bars: [],
+          tatums: [],
+          sections: [],
+          segments: []
+        });
+      }
+    };
+    
+    fetchAudioData();
+  }, [currentTrack, token, setAudioFeatures, setAudioAnalysis]);
 
   if (!token || !user) {
     return null;
   }
 
-  const toggleDarkMode = () => {
-    setDarkMode(!darkMode);
-    document.documentElement.classList.toggle('dark', !darkMode);
-  };
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-light dark:bg-dark flex items-center justify-center">
+        <motion.div 
+          className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-8 flex flex-col items-center"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+        >
+          <Loader2 className="w-8 h-8 text-green-500 animate-spin mb-4" />
+          <div className="text-gray-800 dark:text-white text-lg font-medium">
+            {retryCount > 0 ? `Retrying... (${retryCount}/${MAX_RETRIES})` : 'Loading your music...'}
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-light dark:bg-dark flex items-center justify-center">
+        <motion.div 
+          className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-8 flex flex-col items-center"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+        >
+          <AlertCircle className="w-8 h-8 text-red-500 mb-4" />
+          <div className="text-gray-800 dark:text-white text-lg font-medium">{error}</div>
+          <button 
+            onClick={() => window.location.reload()}
+            className="mt-4 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
+          >
+            Retry
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
-    <div className={`min-h-screen ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-gray-900 to-black'} text-white p-8 transition-colors duration-300`}>
-      <div className="max-w-7xl mx-auto">
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl font-bold">Spotify Gesture Control</h1>
-          <div className="flex items-center gap-4">
-            <button onClick={toggleDarkMode} className="p-2 hover:bg-gray-700 rounded-full transition-colors">
-              {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-            </button>
-            <UserProfile />
+    <motion.div 
+      className="min-h-screen p-4 md:p-8 transition-colors duration-500 overflow-hidden relative"
+      style={{ backgroundColor }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.5 }}
+    >
+      {/* Background gradient overlay */}
+      <div className="absolute inset-0 bg-gradient-to-b from-transparent via-black/50 to-black pointer-events-none" />
+
+      <div className="relative z-10 max-w-7xl mx-auto">
+        <div className="flex justify-between items-center mb-6">
+          <UserProfile />
+          <div className="flex items-center gap-2">
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setShowLyrics(!showLyrics)}
+              className={`p-2 rounded-full ${
+                showLyrics 
+                  ? 'bg-green-500 text-white' 
+                  : 'bg-white/10 text-white hover:bg-white/20'
+              } transition-colors`}
+              title="Toggle lyrics (L)"
+            >
+              <Music2 className="w-5 h-5" />
+            </motion.button>
+            
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setShowKeyboardShortcuts(!showKeyboardShortcuts)}
+              className={`p-2 rounded-full ${
+                showKeyboardShortcuts 
+                  ? 'bg-green-500 text-white' 
+                  : 'bg-white/10 text-white hover:bg-white/20'
+              } transition-colors`}
+              title="Keyboard shortcuts (K)"
+            >
+              <Keyboard className="w-5 h-5" />
+            </motion.button>
           </div>
         </div>
-        {isLoading ? (
-          <div className="flex items-center justify-center h-64">
-            <Loader2 className="w-8 h-8 animate-spin text-green-500" />
-          </div>
-        ) : (
-          <>
-            {error && (
-              <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4 mb-8 flex items-center gap-3">
-                <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
-                <div>
-                  <p className="text-red-200">{error}</p>
-                  {retryCount > 0 && (
-                    <p className="text-red-300 text-sm mt-1">
-                      Retry attempt {retryCount}/3...
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              <div className="lg:col-span-2 space-y-8">
-                <NowPlaying />
-                <Queue />
-              </div>
-              <div className="bg-gray-800 rounded-xl p-6">
-                <h2 className="text-xl font-semibold mb-4">Gesture Control</h2>
-                <GestureControl />
+
+        {/* Keyboard shortcuts dialog */}
+        <AnimatePresence>
+          {showKeyboardShortcuts && (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="absolute top-20 right-4 bg-gray-900/90 backdrop-blur-md p-6 rounded-xl shadow-2xl border border-white/10 z-50 w-80"
+            >
+              <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+                <Keyboard className="w-5 h-5" /> Keyboard Shortcuts
+              </h3>
+              <ul className="space-y-3">
+                {[
+                  { key: 'Space', action: 'Play/Pause' },
+                  { key: '←', action: 'Previous track' },
+                  { key: '→', action: 'Next track' },
+                  { key: '↑', action: 'Volume up' },
+                  { key: '↓', action: 'Volume down' },
+                  { key: 'L', action: 'Toggle lyrics' },
+                  { key: 'K', action: 'Show/hide shortcuts' },
+                ].map(({ key, action }) => (
+                  <li key={key} className="flex justify-between text-sm">
+                    <span className="text-white">{action}</span>
+                    <span className="bg-white/10 px-3 py-1 rounded text-gray-300 font-mono">{key}</span>
+                  </li>
+                ))}
+              </ul>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="flex flex-col lg:flex-row gap-6">
+          <div className="flex-1 space-y-6">
+            <NowPlaying albumArtRef={albumArtRef} />
+            <TrackGenres onGenreClick={(genre) => setSelectedGenre(genre)} />
+            
+            {/* Recommendations Tabs */}
+            <div className="mb-2">
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => setActiveTab('standard')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center ${
+                    activeTab === 'standard'
+                      ? 'bg-green-500 text-white'
+                      : 'bg-white/10 text-white hover:bg-white/20'
+                  }`}
+                >
+                  <Music2 className="w-4 h-4 mr-2" />
+                  Quick Recommendations
+                </button>
+                <button
+                  onClick={() => setActiveTab('explore')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center ${
+                    activeTab === 'explore'
+                      ? 'bg-green-500 text-white'
+                      : 'bg-white/10 text-white hover:bg-white/20'
+                  }`}
+                >
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Explore Deep
+                </button>
               </div>
             </div>
-          </>
-        )}
+            
+            {/* Tab Content */}
+            <AnimatePresence mode="wait">
+              {activeTab === 'standard' ? (
+                <motion.div
+                  key="standard"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="grid grid-cols-1 md:grid-cols-2 gap-6"
+                >
+                  <PlayerCard />
+                  <Queue />
+                  <GestureControl />
+                  <TrackGenres />
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="explore"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <ExploreRecommendations />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          <AnimatePresence mode="wait">
+            {showLyrics && (
+              <motion.div 
+                className="w-full lg:w-[400px]"
+                initial={{ opacity: 0, x: 50 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 50 }}
+                transition={{ duration: 0.3 }}
+              >
+                <EnhancedLyricsDisplay />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
-    </div>
+    </motion.div>
   );
 };
 
