@@ -1,15 +1,25 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Music } from 'lucide-react';
 import { SPOTIFY_AUTH_URL } from '../lib/spotify';
+import useSpotifyStore from '../stores/useSpotifyStore';
 
 const Login: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { clearSession } = useSpotifyStore();
+  
+  // Immediately clear any existing session when the login page is loaded
+  useEffect(() => {
+    clearSession();
+    localStorage.removeItem('spotify_token');
+    localStorage.removeItem('spotify_token_expiration');
+  }, [clearSession]);
 
   const handleLogin = async () => {
     setIsLoading(true);
     setError(null);
     try {
+      // Force showing the dialog to make sure the user can select proper permissions
       const authUrlWithDialog = `${SPOTIFY_AUTH_URL}&show_dialog=true`;
       window.location.href = authUrlWithDialog;
     } catch (err) {

@@ -1,154 +1,150 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash, Music, ChevronDown, ChevronUp } from 'lucide-react';
-import useSpotifyStore from '../stores/useSpotifyStore';
-import { createPlaylist, deletePlaylist, getUserPlaylists, getPlaylistTracks } from '../lib/spotify';
+import { motion, AnimatePresence } from 'framer-motion';
+import { X, Plus, Music, Loader2 } from 'lucide-react';
+import { getUserPlaylists, addTrackToPlaylist } from '../lib/spotify';
 
-const PlaylistManager: React.FC = () => {
-  const { user } = useSpotifyStore();
-  const [playlists, setPlaylists] = useState([]);
-  const [newPlaylistName, setNewPlaylistName] = useState('');
-  const [confirmDelete, setConfirmDelete] = useState(null);
-  const [expandedPlaylist, setExpandedPlaylist] = useState(null);
-  const [playlistTracks, setPlaylistTracks] = useState([]);
+interface PlaylistManagerProps {
+  currentTrack: SpotifyApi.TrackObjectFull;
+  onClose: () => void;
+}
+
+const PlaylistManager: React.FC<PlaylistManagerProps> = ({ currentTrack, onClose }) => {
+  const [playlists, setPlaylists] = useState<SpotifyApi.PlaylistObjectSimplified[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [addingToPlaylist, setAddingToPlaylist] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchPlaylists = async () => {
-      if (user) {
-        const playlists = await getUserPlaylists();
-        setPlaylists(playlists.items);
+      try {
+        const userPlaylists = await getUserPlaylists();
+        setPlaylists(userPlaylists || []);
+      } catch (err) {
+        setError('Failed to load playlists');
+        console.error('Error fetching playlists:', err);
+      } finally {
+        setLoading(false);
       }
     };
+
     fetchPlaylists();
-  }, [user]);
+  }, []);
 
-  useEffect(() => {
-    const fetchPlaylistTracks = async () => {
-      if (expandedPlaylist) {
-        const tracks = await getPlaylistTracks(expandedPlaylist.id);
-        setPlaylistTracks(tracks.items);
+  const handleAddToPlaylist = async (playlistId: string, playlistName: string) => {
+    try {
+      setAddingToPlaylist(playlistId);
+      const result = await addTrackToPlaylist(playlistId, currentTrack.uri);
+      if (result) {
+        setSuccess(`Added to ${playlistName}`);
+        setTimeout(() => {
+          onClose();
+        }, 1500);
+      } else {
+        setError('Failed to add track to playlist');
       }
-    };
-    fetchPlaylistTracks();
-  }, [expandedPlaylist]);
-
-  const handleCreatePlaylist = async () => {
-    if (newPlaylistName.trim()) {
-      await createPlaylist(newPlaylistName);
-      const playlists = await getUserPlaylists();
-      setPlaylists(playlists.items);
-      setNewPlaylistName('');
+    } catch (err) {
+      setError('Failed to add track to playlist');
+      console.error('Error adding track:', err);
+    } finally {
+      setAddingToPlaylist(null);
     }
   };
 
-  const handleDeletePlaylist = async (playlistId) => {
-    await deletePlaylist(playlistId);
-    const playlists = await getUserPlaylists();
-    setPlaylists(playlists.items);
-    setConfirmDelete(null);
-  };
-
-  const handlePlaylistClick = (playlist) => {
-    if (expandedPlaylist === playlist) {
-      setExpandedPlaylist(null);
-    } else {
-      setExpandedPlaylist(playlist);
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) {
+      onClose();
     }
   };
 
   return (
-    <div className="bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl p-6 w-full border border-white/10">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-white">Playlists</h2>
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={newPlaylistName}
-            onChange={(e) => setNewPlaylistName(e.target.value)}
-            placeholder="New Playlist Name"
-            className="bg-gray-800 text-white p-2 rounded-lg"
-          />
-          <button
-            onClick={handleCreatePlaylist}
-            className="p-2 bg-green-500 text-white rounded-full hover:bg-green-600 transition-colors"
-          >
-            <Plus className="w-5 h-5" />
-          </button>
-        </div>
-      </div>
-      <div className="space-y-4 max-h-[500px] overflow-y-auto custom-scrollbar">
-        {playlists.length === 0 ? (
-          <div className="flex items-center justify-center text-gray-400 py-10">
-            <Music className="w-12 h-12 text-gray-300 mr-4" />
-            <p>No playlists found</p>
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+        onClick={handleBackdropClick}
+      >
+        <motion.div
+          initial={{ scale: 0.95, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.95, opacity: 0 }}
+          className="bg-gray-800 rounded-xl p-6 w-full max-w-md shadow-2xl border border-white/10"
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold text-white">Add to Playlist</h2>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-white/10 rounded-full transition-colors"
+            >
+              <X className="w-5 h-5 text-gray-400" />
+            </button>
           </div>
-        ) : (
-          playlists.map((playlist) => (
-            <div key={playlist.id} className="flex flex-col gap-3 p-3 hover:bg-white/5 rounded-xl transition-colors group">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <img
-                    src={playlist.images[0]?.url || '/placeholder-playlist.png'}
-                    alt={playlist.name}
-                    className="w-12 h-12 rounded-lg object-cover shadow-md"
-                  />
-                  <p className="font-medium text-white truncate">{playlist.name}</p>
+
+          {error && (
+            <div className="mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+              <p className="text-red-400">{error}</p>
+            </div>
+          )}
+
+          {success && (
+            <div className="mb-4 p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
+              <p className="text-green-400">{success}</p>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="flex items-center justify-center h-48">
+              <Loader2 className="w-8 h-8 text-white animate-spin" />
+            </div>
+          ) : (
+            <div className="max-h-[60vh] overflow-y-auto pr-2 space-y-2">
+              {playlists.length === 0 ? (
+                <div className="text-center text-gray-400 py-8">
+                  No playlists found
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handlePlaylistClick(playlist)}
-                    className="p-2 bg-gray-700 text-white rounded-full hover:bg-gray-600 transition-colors"
+              ) : (
+                playlists.map(playlist => (
+                  <motion.button
+                    key={playlist.id}
+                    onClick={() => handleAddToPlaylist(playlist.id, playlist.name)}
+                    className="w-full p-4 bg-white/5 hover:bg-white/10 rounded-lg transition-colors flex items-center gap-4 group disabled:opacity-50 disabled:cursor-not-allowed"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    disabled={addingToPlaylist === playlist.id}
                   >
-                    {expandedPlaylist === playlist ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                  </button>
-                  {confirmDelete === playlist.id ? (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleDeletePlaylist(playlist.id)}
-                        className="p-2 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors"
-                      >
-                        Confirm
-                      </button>
-                      <button
-                        onClick={() => setConfirmDelete(null)}
-                        className="p-2 bg-gray-500 text-white rounded-full hover:bg-gray-600 transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setConfirmDelete(playlist.id)}
-                      className="p-2 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors"
-                    >
-                      <Trash className="w-5 h-5" />
-                    </button>
-                  )}
-                </div>
-              </div>
-              {expandedPlaylist === playlist && (
-                <div className="space-y-2">
-                  {playlistTracks.map((track) => (
-                    <div key={track.track.id} className="flex items-center gap-3 p-2 hover:bg-white/10 rounded-xl transition-colors">
+                    {playlist.images?.[0]?.url ? (
                       <img
-                        src={track.track.album.images[0].url}
-                        alt={track.track.name}
-                        className="w-10 h-10 rounded-lg object-cover shadow-md"
+                        src={playlist.images[0].url}
+                        alt={playlist.name}
+                        className="w-12 h-12 rounded object-cover"
                       />
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-white truncate">{track.track.name}</p>
-                        <p className="text-sm text-gray-400 truncate">
-                          {track.track.artists.map((a) => a.name).join(', ')}
-                        </p>
+                    ) : (
+                      <div className="w-12 h-12 rounded bg-white/10 flex items-center justify-center">
+                        <Music className="w-6 h-6 text-gray-400" />
                       </div>
+                    )}
+                    <div className="flex-1 text-left">
+                      <h3 className="text-white font-medium truncate">{playlist.name}</h3>
+                      <p className="text-gray-400 text-sm truncate">
+                        {playlist.tracks.total} tracks
+                      </p>
                     </div>
-                  ))}
-                </div>
+                    {addingToPlaylist === playlist.id ? (
+                      <Loader2 className="w-5 h-5 text-white animate-spin" />
+                    ) : (
+                      <Plus className="w-5 h-5 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    )}
+                  </motion.button>
+                ))
               )}
             </div>
-          ))
-        )}
-      </div>
-    </div>
+          )}
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
   );
 };
 

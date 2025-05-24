@@ -2,26 +2,39 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --bg-light: #f3f4f6;
+  --bg-dark: #111827;
+}
+
+html, body, #root {
+  @apply h-full w-full m-0 p-0;
+}
+
+body {
+  @apply bg-light text-gray-900 transition-colors duration-300;
+}
+
+.dark body {
+  @apply bg-dark text-white;
+}
+
 .custom-scrollbar::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
   border-radius: 10px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.2);
   border-radius: 10px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.5);
-}
-
-.dark {
-  @apply bg-gray-900 text-white;
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .transition-colors {
@@ -45,4 +58,16 @@
   .lg\:col-span-2 {
     @apply col-span-1;
   }
+}
+
+button, input, a {
+  @apply transition-all duration-200 ease-out;
+}
+
+/* Loading spinner animation */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
 }

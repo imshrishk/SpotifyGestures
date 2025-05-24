@@ -1,19 +1,30 @@
 import React, { useState, useEffect } from 'react';
-import { List, Music, Shuffle, Repeat, Playlist } from 'lucide-react';
+import { List, Music, Shuffle, Repeat, Play } from 'lucide-react';
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { shufflePlaylist, toggleRepeat } from '../lib/spotify';
 import spotify from '../lib/spotify';
+import { SpotifyApi } from '../lib/spotifyApi';
 
-type Track = {
-  id;
-  name;
-  artists: { name }[];
-  album: { name; images: { url }[] };
-  duration_ms?;
-};
+interface Track {
+  id: string;
+  name: string;
+  artists: { name: string }[];
+  album: { name: string; images: { url: string }[] };
+  duration_ms?: number;
+  uri: string;
+}
+
+interface TrackObjectSimplified {
+  id: string;
+  name: string;
+  artists: { name: string }[];
+  album?: { name: string; images: { url: string }[] };
+  uri: string;
+  duration_ms?: number;
+}
 
 const Queue: React.FC = () => {
-  const { queue, currentTrack } = useSpotifyStore();
+  const { queue, currentTrack, token } = useSpotifyStore();
   const [activeTab, setActiveTab] = useState<'upcoming' | 'recent'>('upcoming');
   const [isShuffled, setIsShuffled] = useState(false);
   const [repeatMode, setRepeatMode] = useState<'off' | 'track' | 'context'>('off');
@@ -23,7 +34,19 @@ const Queue: React.FC = () => {
     const fetchRecentTracks = async () => {
       try {
         const response = await spotify.getMyRecentlyPlayedTracks({ limit: 20 });
-        setRecentTracks(response.items.map(item => item.track));
+        // Convert to Track format
+        const formattedTracks: Track[] = response.items.map((item: any) => {
+          const track = item.track;
+          return {
+            id: track.id,
+            name: track.name,
+            artists: track.artists,
+            album: track.album,
+            duration_ms: track.duration_ms,
+            uri: track.uri
+          };
+        });
+        setRecentTracks(formattedTracks);
       } catch (error) {
         console.error(error);
       }
@@ -54,7 +77,28 @@ const Queue: React.FC = () => {
     }
   };
 
-  const formatDuration = (ms) => {
+  const playSong = async (uri: string, index: number) => {
+    if (!token) return;
+    
+    try {
+      if (activeTab === 'upcoming') {
+        // For upcoming tracks, use the skip next method to preserve queue
+        for (let i = 0; i < index; i++) {
+          await SpotifyApi.skipToNext(token);
+          // Small delay to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      } else {
+        // For recent tracks, play with context if available
+        await SpotifyApi.playSmartly(token, uri);
+      }
+    } catch (error) {
+      console.error('Error playing track:', error);
+    }
+  };
+
+  const formatDuration = (ms: number | undefined) => {
+    if (!ms) return '0:00';
     const minutes = Math.floor(ms / 60000);
     const seconds = ((ms % 60000) / 1000).toFixed(0);
     return `${minutes}:${parseInt(seconds) < 10 ? '0' : ''}${seconds}`;
@@ -109,21 +153,27 @@ const Queue: React.FC = () => {
         ) : (
           displayTracks.slice(0, 20).map((track, index) => (
             <div
-              key={track.id}
-              className="flex items-center gap-3 p-3 hover:bg-white/5 rounded-xl transition-colors group"
+              key={`${track.id}-${index}`}
+              className="flex items-center gap-3 p-3 hover:bg-white/5 rounded-xl transition-colors group cursor-pointer"
+              onClick={() => playSong(track.uri, index)}
             >
               <span className="text-sm text-gray-500 w-6 opacity-50 group-hover:opacity-100">
                 {index + 1}
               </span>
-              <img
-                src={track.album.images[2]?.url || '/placeholder-album.png'}
-                alt={track.album.name}
-                className="w-12 h-12 rounded-lg object-cover shadow-md"
-              />
+              <div className="relative">
+                <img
+                  src={track.album.images[2]?.url || '/placeholder-album.png'}
+                  alt={track.album.name}
+                  className="w-12 h-12 rounded-lg object-cover shadow-md"
+                />
+                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                  <Play className="w-5 h-5 text-white" />
+                </div>
+              </div>
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-white truncate">{track.name}</p>
                 <p className="text-sm text-gray-400 truncate">
-                  {track.artists.map((a) => a.name).join(', ')}
+                  {track.artists.map((a: { name: string }) => a.name).join(', ')}
                 </p>
               </div>
               {track.duration_ms && (
