@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ListMusic, Play, Pause, ChevronRight, ChevronLeft, Clock, User, Info } from 'lucide-react';
+import { ListMusic, Play, Pause, ChevronRight, ChevronLeft, Clock, User, Info, Plus } from 'lucide-react';
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { SpotifyApi } from '../lib/spotifyApi';
+import { addToQueue } from '../lib/spotify';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
@@ -174,7 +175,6 @@ const Playlists: React.FC = () => {
       
       if (trackIndex !== -1) {
         console.log(`Found track at position ${trackIndex} in playlist. Playing context.`);
-        
         try {
           // Adding explicit playlist context and offset to ensure queue is maintained
           await SpotifyApi.playContext(token, playlistUri, trackIndex);
@@ -183,28 +183,22 @@ const Playlists: React.FC = () => {
           setIsPlaying(true);
         } catch (error) {
           console.error('Error playing from context with index:', error);
-          
-          // Fall back to direct track play only if absolutely necessary
-          console.warn('Falling back to direct track playback as last resort');
-          await SpotifyApi.playTrack(token, trackUri);
-          setPlayingTrackId(trackId);
-          setIsPlaying(true);
+          // Only fall back to direct track play if all context attempts fail
+          alert('Could not start playlist context playback. Please make sure your Spotify app is open and active.');
         }
       } else {
-        console.warn('Track not found in playlist array - using direct URI playback');
+        console.warn('Track not found in playlist array - using direct URI playback as last resort');
         try {
           await SpotifyApi.playContext(token, playlistUri, 0);
           setPlayingTrackId(trackId);
           setIsPlaying(true);
         } catch (error) {
-          console.error('Error playing playlist context:', error);
-          await SpotifyApi.playTrack(token, trackUri);
-          setPlayingTrackId(trackId);
-          setIsPlaying(true);
+          console.error('Error playing playlist from start as last resort:', error);
+          alert('Could not start playlist playback.');
         }
       }
     } catch (error) {
-      console.error('Error playing track:', error);
+      console.error('Error in playTrack:', error);
     }
   };
 
@@ -349,7 +343,7 @@ const Playlists: React.FC = () => {
                       playingTrackId === track.id ? 'bg-white/10' : ''
                     }`}
                   >
-                    <div className="flex items-center justify-center">
+                    <div className="flex items-center justify-center relative">
                       {playingTrackId === track.id ? (
                         <button
                           onClick={(e) => playTrack(track.uri, track.id, selectedPlaylist.uri, e)}
@@ -362,13 +356,13 @@ const Playlists: React.FC = () => {
                           )}
                         </button>
                       ) : (
-                        <span className="text-gray-500 group-hover:hidden">
+                        <span className="text-gray-500 group-hover:opacity-0 transition-opacity">
                           {index + 1}
                         </span>
                       )}
                       <button
                         onClick={(e) => playTrack(track.uri, track.id, selectedPlaylist.uri, e)}
-                        className="hidden group-hover:block"
+                        className={`absolute transition-opacity ${playingTrackId === track.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
                       >
                         <Play className="w-4 h-4" fill="currentColor" />
                       </button>
@@ -404,7 +398,23 @@ const Playlists: React.FC = () => {
                       {formatDuration(track.duration_ms)}
                     </div>
                     
-                    <div className="flex items-center justify-center">
+                    <div className="flex items-center justify-center space-x-2">
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            await addToQueue(track.uri);
+                            alert('Added to queue!');
+                          } catch (error) {
+                            console.error('Error adding to queue:', error);
+                            alert('Failed to add to queue.');
+                          }
+                        }}
+                        className="p-2 rounded-full bg-blue-500 hover:bg-blue-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Add to Queue"
+                      >
+                        <Plus className="w-4 h-4 text-white" />
+                      </button>
                       <button
                         onClick={() => navigateToTrackInfo(track.id)}
                         className="p-2 rounded-full bg-green-500 hover:bg-green-600 opacity-0 group-hover:opacity-100 transition-opacity"

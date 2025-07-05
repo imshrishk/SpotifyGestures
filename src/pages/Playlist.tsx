@@ -103,19 +103,14 @@ const Playlist: React.FC = () => {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
   
-  const handlePlayTrack = async (uri: string) => {
+  const handlePlayTrack = async (index: number) => {
+    if (!token || !playlist?.uri) return;
     try {
-      // The playTrack function in spotify.ts only takes the track URI.
-      await playSingleTrack(uri);
+      // This function call provides the playlist context to Spotify
+      await SpotifyApi.playContext(token, playlist.uri, index);
     } catch (error: any) {
-      console.error('Error playing track:', error);
-      
-      // Check if this is a permissions error
-      if (error.message && (
-        error.message.includes('permissions') || 
-        error.message.includes('403') ||
-        error.message.includes('token')
-      )) {
+      console.error('Error playing track in context:', error);
+      if (error.message && (error.message.includes('permissions') || error.message.includes('403') || error.message.includes('token'))) {
         setShowAudioFeaturesError(true);
       } else {
         alert('Error playing track. Please make sure Spotify is open on one of your devices.');
@@ -331,7 +326,7 @@ const Playlist: React.FC = () => {
                   <td className="py-3 px-2">
                     <span className="group-hover:hidden">{index + 1}</span>
                     <button 
-                      onClick={() => handlePlayTrack(item.track.uri)}
+                      onClick={() => handlePlayTrack(index)}
                       className="hidden group-hover:inline"
                     >
                       <Play className="w-4 h-4 fill-current" />
@@ -353,7 +348,7 @@ const Playlist: React.FC = () => {
                         )}
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/image:opacity-100 flex items-center justify-center transition-opacity">
                           <button 
-                            onClick={() => handlePlayTrack(item.track.uri)}
+                            onClick={() => handlePlayTrack(index)}
                             className="p-1.5 bg-green-500 rounded-full"
                           >
                             <Play className="w-3.5 h-3.5 text-white fill-current" />

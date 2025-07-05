@@ -29,7 +29,8 @@ const Player: React.FC = () => {
     volume, 
     setVolume: updateVolume,
     setAudioFeatures,
-    setAudioAnalysis
+    setAudioAnalysis,
+    isAuthenticated
   } = useSpotifyStore();
   const [isLoading, setIsLoading] = useState(true);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
@@ -87,8 +88,11 @@ const Player: React.FC = () => {
   }, [handleKeyPress]);
 
   useEffect(() => {
-    if (!token || !user) {
-      navigate('/');
+    // Only fetch data if user is authenticated
+    if (!isAuthenticated()) {
+      setIsLoading(false);
+      setIsInitialLoad(false);
+      setError(null); // Clear any previous errors
       return;
     }
 
@@ -107,7 +111,7 @@ const Player: React.FC = () => {
         ]);
 
         if (trackResponse?.item) {
-          setCurrentTrack(trackResponse.item);
+          setCurrentTrack(trackResponse.item, trackResponse.context);
           setIsPlaying(trackResponse.is_playing);
           setError(null);
         } else {
@@ -153,7 +157,7 @@ const Player: React.FC = () => {
     updatePlayerState();
     const interval = setInterval(updatePlayerState, 5000);
     return () => clearInterval(interval);
-  }, [token, user, navigate, setCurrentTrack, setQueue, setError, setIsPlaying, retryCount, isInitialLoad]);
+  }, [isAuthenticated, navigate, setCurrentTrack, setQueue, setError, setIsPlaying, retryCount, isInitialLoad]);
 
   // Extract colors from album art when it changes
   useEffect(() => {
@@ -178,7 +182,7 @@ const Player: React.FC = () => {
   // Fetch audio features when current track changes
   useEffect(() => {
     const fetchAudioData = async () => {
-      if (!currentTrack?.id || !token) return;
+      if (!currentTrack?.id || !isAuthenticated()) return;
       
       try {
         // Fetch audio features and analysis in one call
@@ -252,11 +256,9 @@ const Player: React.FC = () => {
     };
     
     fetchAudioData();
-  }, [currentTrack, token, setAudioFeatures, setAudioAnalysis]);
+  }, [currentTrack, isAuthenticated, setAudioFeatures, setAudioAnalysis]);
 
-  if (!token || !user) {
-    return null;
-  }
+  
 
   if (isLoading) {
     return (
@@ -376,10 +378,9 @@ const Player: React.FC = () => {
         </AnimatePresence>
 
         <div className="flex flex-col lg:flex-row gap-6">
-          <div className="flex-1 space-y-6">
+          <div className="flex-1 flex flex-col h-full">
             <NowPlaying albumArtRef={albumArtRef} />
             <TrackGenres onGenreClick={(genre) => setSelectedGenre(genre)} />
-            
             {/* Recommendations Tabs */}
             <div className="mb-2">
               <div className="flex space-x-2">
@@ -407,35 +408,36 @@ const Player: React.FC = () => {
                 </button>
               </div>
             </div>
-            
             {/* Tab Content */}
-            <AnimatePresence mode="wait">
-              {activeTab === 'standard' ? (
-                <motion.div
-                  key="standard"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="grid grid-cols-1 md:grid-cols-2 gap-6"
-                >
-                  <PlayerCard />
-                  <Queue />
-                  <GestureControl />
-                  <TrackGenres />
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="explore"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <ExploreRecommendations />
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <div className="flex-1 min-h-0 flex flex-col">
+              <AnimatePresence mode="wait">
+                {activeTab === 'standard' ? (
+                  <motion.div
+                    key="standard"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="flex-1 flex flex-col"
+                  >
+                    <Queue />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="explore"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <ExploreRecommendations />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+            <div className="mt-6">
+              <GestureControl />
+            </div>
           </div>
 
           <AnimatePresence mode="wait">

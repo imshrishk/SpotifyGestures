@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { 
-  getRecommendations, 
   getAvailableGenreSeeds, 
   getTopTracks, 
   getTopArtists, 
@@ -14,7 +13,6 @@ import {
   Play, 
   Pause, 
   RefreshCw, 
-  Plus, 
   Sliders, 
   Disc, 
   Tag, 
@@ -23,8 +21,7 @@ import {
   Check
 } from 'lucide-react';
 import useSpotifyStore from '../stores/useSpotifyStore';
-import { SpotifyApi } from '../lib/spotifyApi';
-import { getUserPlaylists } from '../lib/spotify'; 
+import { getUserPlaylists } from '../lib/spotify';
 
 interface Artist {
   id: string;
@@ -153,9 +150,9 @@ const EnhancedRecommendations: React.FC = () => {
       const loadPlaylists = async () => {
         try {
           const playlists = await getUserPlaylists();
-          if (playlists && playlists.items) {
+          if (playlists) {
             // Map the response to match the PlaylistOption type
-            const playlistOptions: PlaylistOption[] = playlists.items.map(playlist => ({
+            const playlistOptions: PlaylistOption[] = playlists.map((playlist: any) => ({
               id: playlist.id,
               name: playlist.name,
               images: playlist.images
@@ -209,10 +206,9 @@ const EnhancedRecommendations: React.FC = () => {
       }
       
       // Calculate how many of each seed we can use (max 5 total)
-      const totalSeeds = seedTracks.length + seedArtists.length + seedGenres.length;
-      let maxTracks = Math.min(seedTracks.length, 5);
-      let maxArtists = Math.min(seedArtists.length, 5 - maxTracks);
-      let maxGenres = Math.min(seedGenres.length, 5 - maxTracks - maxArtists);
+      const maxTracks = Math.min(seedTracks.length, 5);
+      const maxArtists = Math.min(seedArtists.length, 5 - maxTracks);
+      const maxGenres = Math.min(seedGenres.length, 5 - maxTracks - maxArtists);
       
       // Prepare API parameters
       const params = new URLSearchParams();

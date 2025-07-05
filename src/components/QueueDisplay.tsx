@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Music, Clock, RefreshCw } from 'lucide-react';
+import { Music, Clock, RefreshCw, XCircle } from 'lucide-react';
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { getQueue } from '../lib/spotify';
 
@@ -24,7 +24,7 @@ const QueueDisplay: React.FC<QueueDisplayProps> = ({ onClose }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const { currentTrack } = useSpotifyStore();
+  const { currentTrack, removeTrackFromQueue } = useSpotifyStore();
 
   const fetchQueue = useCallback(async () => {
     try {
@@ -160,6 +160,13 @@ const QueueDisplay: React.FC<QueueDisplayProps> = ({ onClose }) => {
                       <span className="text-sm text-gray-400 flex-shrink-0">
                         {formatDuration(track.duration_ms)}
                       </span>
+                      <button
+                        onClick={() => removeTrackFromQueue(track.id)}
+                        className="p-1 rounded-full hover:bg-white/10 transition-colors"
+                        title="Remove from Queue"
+                      >
+                        <XCircle className="w-4 h-4 text-gray-400 hover:text-red-500" />
+                      </button>
                     </motion.div>
                   ))}
                 </div>

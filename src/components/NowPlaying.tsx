@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, Heart, ListMusic, Share2, BarChart, Waves, CircleDot, Sparkles, Music, Plus, AlertCircle, Check as CheckIcon } from 'lucide-react';
+import { motion, useAnimation, AnimatePresence } from 'framer-motion';
+import { useColorThief } from '../hooks/useColorThief';
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { playPause, nextTrack, previousTrack, setVolume, shufflePlaylist, toggleRepeat, likeTrack, getCurrentTrack, seekToPosition } from '../lib/spotify';
-import { motion, useAnimation, AnimatePresence } from 'framer-motion';
+import { SpotifyApi } from '../lib/spotifyApi';
 import AudioVisualizer from './AudioVisualizer';
 import PlaylistManager from './PlaylistManager';
-import { SpotifyApi } from '../lib/spotifyApi';
 
 interface NowPlayingProps {
   albumArtRef?: React.RefObject<HTMLImageElement>;
@@ -59,6 +61,28 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
   
   // Use the external ref if provided, otherwise use the internal one
   const albumArtRef = externalAlbumArtRef || internalAlbumArtRef;
+  
+  // Color thief hook for extracting colors from album art
+  const { getColor, initializeColorThief } = useColorThief(albumArtRef);
+
+  // Initialize color thief when album art loads
+  useEffect(() => {
+    if (albumArtRef.current && currentTrack?.album?.images?.[0]?.url) {
+      initializeColorThief();
+    }
+  }, [currentTrack?.album?.images?.[0]?.url, initializeColorThief]);
+
+  // Extract and apply colors when available
+  useEffect(() => {
+    if (albumArtRef.current) {
+      const color = getColor();
+      if (color) {
+        const [r, g, b] = color;
+        const colorHex = `rgb(${r}, ${g}, ${b})`;
+        document.documentElement.style.setProperty('--primary-color', colorHex);
+      }
+    }
+  }, [currentTrack?.album?.images?.[0]?.url, getColor]);
 
   const formatTime = (ms: number) => {
     if (!ms) return '0:00';

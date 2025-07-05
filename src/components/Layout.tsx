@@ -1,16 +1,19 @@
 import React from 'react';
 import { Link, useLocation, Navigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { 
-  Home, 
-  ListMusic, 
-  History, 
-  Lightbulb, 
+import {
+  Home,
+  ListMusic,
+  History,
+  Lightbulb,
   Settings,
   LogOut,
-  User
+  User,
+  Mic,
+  Users
 } from 'lucide-react';
 import useSpotifyStore from '../stores/useSpotifyStore';
+import useVoiceCommands from '../hooks/useVoiceCommands';
 
 interface NavItemProps {
   to: string;
@@ -36,6 +39,7 @@ const NavItem: React.FC<NavItemProps> = ({ to, icon, label, isActive }) => (
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
   const { clearSession, user, token } = useSpotifyStore();
+  const { isListening, setIsListening } = useVoiceCommands();
 
   // Redirect to login if not authenticated
   if (!token && location.pathname !== '/login') {
@@ -47,16 +51,18 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     { to: '/player/playlists', icon: <ListMusic size={20} />, label: 'Playlists' },
     { to: '/player/recommendations', icon: <Lightbulb size={20} />, label: 'Recommendations' },
     { to: '/player/history', icon: <History size={20} />, label: 'History' },
+    { to: '/friends', icon: <Users size={20} />, label: 'Friends' },
   ];
 
   return (
-    <div className="min-h-screen flex bg-[var(--background)]">
-      {/* Sidebar */}
-      <motion.aside
-        initial={{ x: -250 }}
-        animate={{ x: 0 }}
-        className="w-64 bg-[var(--background-elevated)] p-4 flex flex-col shadow-lg"
-      >
+    
+<div className="min-h-screen flex bg-primary text-white">
+  <motion.aside
+    initial={{ x: -250 }}
+    animate={{ x: 0 }}
+    className="w-64 bg-accent p-4 flex flex-col shadow-lg"
+  >
+
         <div className="mb-6">
           <motion.div 
             initial={{ opacity: 0, y: -20 }}
@@ -102,6 +108,13 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         
         <div className="space-y-2 mt-6">
           <motion.button
+            onClick={() => setIsListening(!isListening)}
+            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 ${isListening ? 'bg-red-500 text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--background-pressed)] hover:text-[var(--text-primary)]'}`}
+          >
+            <Mic size={20} />
+            <span className="font-medium">{isListening ? 'Stop Listening' : 'Start Voice Commands'}</span>
+          </motion.button>
+          <motion.button
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.5 }}
@@ -130,4 +143,4 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   );
 };
 
-export default Layout; 
+export default Layout;

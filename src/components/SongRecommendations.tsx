@@ -1,11 +1,22 @@
 import React, { useEffect, useState } from 'react';
-import { Music } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Music, Plus } from 'lucide-react';
 import useSpotifyStore from '../stores/useSpotifyStore';
-import { getRecommendations } from '../lib/spotify';
+import { getRecommendations, addToQueue } from '../lib/spotify';
 
 const SongRecommendations: React.FC = () => {
   const { currentTrack } = useSpotifyStore();
   const [recommendations, setRecommendations] = useState([]);
+
+  const handleAddToQueue = async (uri: string) => {
+    try {
+      await addToQueue(uri);
+      alert('Added to queue!');
+    } catch (error) {
+      console.error('Error adding to queue:', error);
+      alert('Failed to add to queue.');
+    }
+  };
 
   useEffect(() => {
     const fetchRecommendations = async () => {
@@ -43,6 +54,13 @@ const SongRecommendations: React.FC = () => {
                   {track.artists.map((a) => a.name).join(', ')}
                 </p>
               </div>
+              <button
+                onClick={() => handleAddToQueue(track.uri)}
+                className="p-2 rounded-full bg-green-500/20 hover:bg-green-500/40 transition-colors"
+                title="Add to Queue"
+              >
+                <Plus className="w-4 h-4 text-green-400" />
+              </button>
             </div>
           ))}
         </div>

@@ -43,17 +43,17 @@ const Callback: React.FC = () => {
           followers: spotifyUser.followers,
           product: spotifyUser.product // Store account type (premium, free, etc.)
         };
-        setUser(user);
-        
-        // Store additional user data in localStorage for persistence
-        localStorage.setItem('spotify_user', JSON.stringify(user));
+        setUser(user); // This will also update localStorage
 
         // Clean up URL
         if (window.location.hash) {
           window.history.replaceState({}, document.title, window.location.pathname);
         }
 
-        navigate('/player');
+        // Small delay to ensure store updates are processed
+        setTimeout(() => {
+          navigate('/');
+        }, 100);
       } catch (error) {
         console.error('Auth error:', error);
         localStorage.removeItem('spotify_token');

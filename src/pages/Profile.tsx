@@ -72,8 +72,8 @@ const Profile: React.FC = () => {
         
         // Load user's playlists
         const playlistsResponse = await getUserPlaylists();
-        if (playlistsResponse?.items) {
-          setPlaylists(playlistsResponse.items.slice(0, 6));
+        if (playlistsResponse && Array.isArray(playlistsResponse)) {
+          setPlaylists(playlistsResponse.slice(0, 6));
         }
         
         await Promise.all([

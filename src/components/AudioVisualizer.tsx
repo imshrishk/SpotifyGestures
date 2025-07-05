@@ -293,7 +293,7 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     switch (style) {
       case 'wave':
         return (
-          <div className="absolute bottom-0 left-0 right-0" style={{ height: `${visualizerHeight}px` }}>
+          <div data-testid="audio-visualizer" className="absolute bottom-0 left-0 right-0" style={{ height: `${visualizerHeight}px` }}>
             <motion.svg 
               width="100%" 
               height={visualizerHeight} 
@@ -319,7 +319,7 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
         
       case 'circles':
         return (
-          <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-1 px-4" 
+          <div data-testid="audio-visualizer" className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-1 px-4" 
                style={{ height: `${visualizerHeight}px` }}>
             {bars.map((height, i) => (
               <motion.div
@@ -344,7 +344,7 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
         
       case 'particles':
         return (
-          <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center overflow-hidden"
+          <div data-testid="audio-visualizer" className="absolute bottom-0 left-0 right-0 flex items-center justify-center overflow-hidden"
                style={{ height: `${visualizerHeight}px` }}>
             {bars.map((height, i) => (
               <motion.div
@@ -378,7 +378,7 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       case 'bars':
       default:
         return (
-          <div className="absolute bottom-0 left-0 right-0 flex items-end justify-center gap-1 px-4"
+          <div data-testid="audio-visualizer" className="absolute bottom-0 left-0 right-0 flex items-end justify-center gap-1 px-4"
                style={{ height: `${visualizerHeight}px` }}>
             {bars.map((height, i) => (
               <motion.div
@@ -405,6 +405,8 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     }
   };
   
+  if (!isPlaying) return null;
+
   return renderVisualizer();
 };
 
