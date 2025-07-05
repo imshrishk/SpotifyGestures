@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Music, Hand, Palette, Star } from 'lucide-react';
+import { Hand, Palette, Star } from 'lucide-react';
 import { SPOTIFY_AUTH_URL } from '../lib/spotify';
 import useSpotifyStore from '../stores/useSpotifyStore';
 
 const Login: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const { clearSession } = useSpotifyStore();
+  const navigate = useNavigate();
 
   useEffect(() => {
     // Check if the user is already authenticated and redirect if so

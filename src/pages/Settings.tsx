@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 const Settings: React.FC = () => {
-  const [gestureSettings, setGestureSettings] = useState({});
+  const [gestureSettings, setGestureSettings] = useState<Record<string, any>>({});
 
   useEffect(() => {
     const savedSettings = localStorage.getItem('gesture_settings');

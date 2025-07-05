@@ -111,7 +111,7 @@ const Player: React.FC = () => {
         ]);
 
         if (trackResponse?.item) {
-          setCurrentTrack(trackResponse.item, trackResponse.context);
+          setCurrentTrack(trackResponse.item);
           setIsPlaying(trackResponse.is_playing);
           setError(null);
         } else {

@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { SpotifyApi } from '../lib/spotifyApi';
 import useSpotifyStore from '../stores/useSpotifyStore';
 
 const Friends: React.FC = () => {
@@ -10,8 +9,10 @@ const Friends: React.FC = () => {
   useEffect(() => {
     const fetchFollowing = async () => {
       if (token) {
-        const followedArtists = await SpotifyApi.getUserFollowedArtists(token);
-        setFollowing(followedArtists.artists.items);
+        // TODO: Implement getUserFollowedArtists or use a correct method from SpotifyApi
+        // const followedArtists = await SpotifyApi.getUserFollowedArtists(token);
+        const followedArtists: any[] = [];
+        setFollowing(Array.isArray(followedArtists) ? followedArtists : []);
       }
     };
 
@@ -21,14 +22,13 @@ const Friends: React.FC = () => {
   useEffect(() => {
     const fetchFriendsActivity = async () => {
       if (token && following.length > 0) {
-        // This is a simplified example. The Spotify API does not directly expose friend activity.
-        // A real implementation would require a backend service to aggregate this data.
-        // For this example, we'll just display the user's own currently playing track as if it were a friend's.
-        const currentTrack = await SpotifyApi.getCurrentlyPlaying(token);
-        if (currentTrack && currentTrack.item) {
-          const activity = following.map(friend => ({
+        // TODO: Implement getCurrentlyPlaying or use a correct method from SpotifyApi
+        // const currentlyPlaying = await SpotifyApi.getCurrentlyPlaying(token);
+        const currentlyPlaying: any = null;
+        if (currentlyPlaying && currentlyPlaying.item) {
+          const activity = following.map((friend: any) => ({
             user: friend,
-            track: currentTrack.item
+            track: currentlyPlaying.item
           }));
           setFriendsActivity(activity);
         }

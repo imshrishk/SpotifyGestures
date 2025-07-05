@@ -2,6 +2,21 @@ import { useEffect, useState, useCallback } from 'react';
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { playPause, nextTrack, previousTrack, setVolume } from '../lib/spotify';
 
+// Add type declaration for webkitSpeechRecognition
+declare global {
+  interface Window {
+    webkitSpeechRecognition: any;
+  }
+}
+
+// TypeScript compatibility for SpeechRecognition APIs
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
+
 const useVoiceCommands = () => {
   const [isListening, setIsListening] = useState(false);
   const { isPlaying, volume, setIsPlaying, setVolume: updateStoreVolume } = useSpotifyStore();
@@ -36,12 +51,12 @@ const useVoiceCommands = () => {
       return;
     }
 
-    const recognition = new webkitSpeechRecognition();
+    const recognition = new ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)();
     recognition.continuous = true;
     recognition.interimResults = false;
     recognition.lang = 'en-US';
 
-    recognition.onresult = (event) => {
+    recognition.onresult = (event: any) => {
       const transcript = event.results[event.results.length - 1][0].transcript.trim();
       handleVoiceCommand(transcript);
     };
