@@ -5,7 +5,6 @@ import Queue from '../components/Queue';
 import GestureControl from '../components/GestureControl';
 import UserProfile from '../components/UserProfile';
 import EnhancedLyricsDisplay from '../components/EnhancedLyricsDisplay';
-import PlayerCard from '../components/Recommendations';
 import TrackGenres from '../components/TrackGenres';
 import ExploreRecommendations from '../components/ExploreRecommendations';
 import useSpotifyStore from '../stores/useSpotifyStore';
@@ -16,9 +15,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 const Player: React.FC = () => {
   const navigate = useNavigate();
-  const { 
-    token, 
-    user, 
+  const {
     error, 
     currentTrack, 
     setCurrentTrack, 
@@ -38,10 +35,12 @@ const Player: React.FC = () => {
   const [backgroundColor, setBackgroundColor] = useState<string>('#121212');
   const [showLyrics, setShowLyrics] = useState(true);
   const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
-  const [selectedGenre, setSelectedGenre] = useState<string>('');
+  const [_, setSelectedGenre] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'standard' | 'explore'>('standard');
   const albumArtRef = useRef<HTMLImageElement>(null);
   const MAX_RETRIES = 3;
+  const [volumeMode, setVolumeMode] = useState(false);
+  const [showVolumeModeIndicator, setShowVolumeModeIndicator] = useState(false);
 
   // Handle keyboard shortcuts
   const handleKeyPress = useCallback((event: KeyboardEvent) => {
@@ -51,6 +50,16 @@ const Player: React.FC = () => {
     }
 
     switch (event.code) {
+      case 'KeyM': // Toggle volume mode
+        setVolumeMode((prev) => {
+          const newMode = !prev;
+          setShowVolumeModeIndicator(newMode);
+          if (newMode) {
+            setTimeout(() => setShowVolumeModeIndicator(false), 2000);
+          }
+          return newMode;
+        });
+        break;
       case 'Space': // Play/Pause
         event.preventDefault();
         playPause(!isPlaying);
@@ -62,15 +71,21 @@ const Player: React.FC = () => {
       case 'ArrowLeft': // Previous track
         previousTrack();
         break;
-      case 'ArrowUp': // Volume up
-        const newVolumeUp = Math.min(volume + 5, 100);
-        setVolume(newVolumeUp);
-        updateVolume(newVolumeUp);
+      case 'ArrowUp': // Volume up (only in volume mode)
+        if (volumeMode) {
+          event.preventDefault();
+          const newVolumeUp = Math.min(volume + 5, 100);
+          setVolume(newVolumeUp);
+          updateVolume(newVolumeUp);
+        }
         break;
-      case 'ArrowDown': // Volume down
-        const newVolumeDown = Math.max(volume - 5, 0);
-        setVolume(newVolumeDown);
-        updateVolume(newVolumeDown);
+      case 'ArrowDown': // Volume down (only in volume mode)
+        if (volumeMode) {
+          event.preventDefault();
+          const newVolumeDown = Math.max(volume - 5, 0);
+          setVolume(newVolumeDown);
+          updateVolume(newVolumeDown);
+        }
         break;
       case 'KeyL': // Toggle lyrics
         setShowLyrics(!showLyrics);
@@ -79,7 +94,7 @@ const Player: React.FC = () => {
         setShowKeyboardShortcuts(!showKeyboardShortcuts);
         break;
     }
-  }, [isPlaying, setIsPlaying, volume, updateVolume, showLyrics, showKeyboardShortcuts]);
+  }, [isPlaying, setIsPlaying, volume, updateVolume, showLyrics, showKeyboardShortcuts, volumeMode]);
 
   // Add keyboard event listeners
   useEffect(() => {
@@ -342,8 +357,28 @@ const Player: React.FC = () => {
             >
               <Keyboard className="w-5 h-5" />
             </motion.button>
+            {/* Volume mode indicator badge */}
+            {volumeMode && (
+              <span className="ml-2 px-3 py-1 rounded-full bg-green-600 text-white text-xs font-semibold shadow-lg animate-pulse" title="Volume mode active">
+                Volume Mode
+              </span>
+            )}
           </div>
         </div>
+
+        {/* Floating volume mode indicator */}
+        <AnimatePresence>
+          {showVolumeModeIndicator && (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="fixed top-8 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-6 py-3 rounded-full shadow-2xl text-lg font-bold animate-pulse"
+            >
+              Volume Mode Enabled
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Keyboard shortcuts dialog */}
         <AnimatePresence>
@@ -358,20 +393,38 @@ const Player: React.FC = () => {
                 <Keyboard className="w-5 h-5" /> Keyboard Shortcuts
               </h3>
               <ul className="space-y-3">
-                {[
-                  { key: 'Space', action: 'Play/Pause' },
-                  { key: '←', action: 'Previous track' },
-                  { key: '→', action: 'Next track' },
-                  { key: '↑', action: 'Volume up' },
-                  { key: '↓', action: 'Volume down' },
-                  { key: 'L', action: 'Toggle lyrics' },
-                  { key: 'K', action: 'Show/hide shortcuts' },
-                ].map(({ key, action }) => (
-                  <li key={key} className="flex justify-between text-sm">
-                    <span className="text-white">{action}</span>
-                    <span className="bg-white/10 px-3 py-1 rounded text-gray-300 font-mono">{key}</span>
-                  </li>
-                ))}
+                <li className="flex justify-between text-sm">
+                  <span className="text-white">Toggle volume mode</span>
+                  <span className="bg-white/10 px-3 py-1 rounded text-gray-300 font-mono">M</span>
+                </li>
+                <li className="flex justify-between text-sm">
+                  <span className="text-white">{volumeMode ? 'Volume up' : 'Scroll up'}</span>
+                  <span className="bg-white/10 px-3 py-1 rounded text-gray-300 font-mono">↑</span>
+                </li>
+                <li className="flex justify-between text-sm">
+                  <span className="text-white">{volumeMode ? 'Volume down' : 'Scroll down'}</span>
+                  <span className="bg-white/10 px-3 py-1 rounded text-gray-300 font-mono">↓</span>
+                </li>
+                <li className="flex justify-between text-sm">
+                  <span className="text-white">Play/Pause</span>
+                  <span className="bg-white/10 px-3 py-1 rounded text-gray-300 font-mono">Space</span>
+                </li>
+                <li className="flex justify-between text-sm">
+                  <span className="text-white">Previous track</span>
+                  <span className="bg-white/10 px-3 py-1 rounded text-gray-300 font-mono">←</span>
+                </li>
+                <li className="flex justify-between text-sm">
+                  <span className="text-white">Next track</span>
+                  <span className="bg-white/10 px-3 py-1 rounded text-gray-300 font-mono">→</span>
+                </li>
+                <li className="flex justify-between text-sm">
+                  <span className="text-white">Toggle lyrics</span>
+                  <span className="bg-white/10 px-3 py-1 rounded text-gray-300 font-mono">L</span>
+                </li>
+                <li className="flex justify-between text-sm">
+                  <span className="text-white">Show/hide shortcuts</span>
+                  <span className="bg-white/10 px-3 py-1 rounded text-gray-300 font-mono">K</span>
+                </li>
               </ul>
             </motion.div>
           )}

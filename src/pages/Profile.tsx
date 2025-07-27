@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Clock, Music, Disc, Calendar, ChevronRight, ListMusic, UserIcon, Clock3, Clock12, LogOut } from 'lucide-react';
+import { ArrowLeft, Clock, Music, Disc, ChevronRight, ListMusic, UserIcon, LogOut } from 'lucide-react';
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { getCurrentUser, getUserPlaylists, getTopTracks, getTopArtists, getRecentlyPlayed, signOut } from '../lib/spotify';
 import { motion } from 'framer-motion';
@@ -29,7 +29,7 @@ type TimeRange = 'short_term' | 'medium_term' | 'long_term';
 
 const Profile: React.FC = () => {
   const navigate = useNavigate();
-  const { token, user, setUser } = useSpotifyStore();
+  const { token, setUser } = useSpotifyStore();
   const [topTracks, setTopTracks] = useState<TopItem[]>([]);
   const [topArtists, setTopArtists] = useState<TopItem[]>([]);
   const [recentlyPlayed, setRecentlyPlayed] = useState<TopItem[]>([]);
