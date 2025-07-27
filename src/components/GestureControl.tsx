@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, Eye, Hand, RefreshCw, HelpCircle } from 'lucide-react';
-import { initializeHandDetector, detectHand } from '../lib/handGestureDetector';
+import { Camera, Eye, Hand, RefreshCw, HelpCircle, Settings, Zap } from 'lucide-react';
+import { initializeHandDetector, detectHand, getLightingCondition, getAdaptiveThresholds, cleanupHandDetector, isModelReady } from '../lib/handGestureDetector';
 import { playPause, nextTrack, previousTrack, setVolume, likeTrack, dislikeTrack, toggleShuffle, getRecommendations } from '../lib/spotify';
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -13,7 +13,6 @@ const DEFAULT_GESTURE_MAPPING: { [key: string]: string } = {
   'thumbsUp': 'Like',
   'thumbsDown': 'Dislike',
   'peace': 'Toggle Shuffle',
-  'rock': 'Get Recommendations',
   'right': 'Next Track',
   'left': 'Previous Track',
   'up': 'Volume Up',
@@ -22,6 +21,7 @@ const DEFAULT_GESTURE_MAPPING: { [key: string]: string } = {
 
 const GestureControl: React.FC = () => {
   const webcamRef = useRef<Webcam>(null);
+  const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [useGestures, setUseGestures] = useState(true);
@@ -31,6 +31,11 @@ const GestureControl: React.FC = () => {
   const [sensitivity, setSensitivity] = useState<number>(5);
   const [showTutorial, setShowTutorial] = useState(false);
   const [gestureMap, setGestureMap] = useState(DEFAULT_GESTURE_MAPPING);
+  const [showDebugInfo, setShowDebugInfo] = useState(false);
+  const [lightingCondition, setLightingCondition] = useState<string>('normal');
+  const [adaptiveThresholds, setAdaptiveThresholds] = useState<any>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
   const { isPlaying, volume, setVolume: updateStoreVolume, setIsPlaying, currentTrack } = useSpotifyStore();
 
   useEffect(() => {
@@ -112,15 +117,70 @@ const GestureControl: React.FC = () => {
     }
   }, [isPlaying, volume, sensitivity, currentTrack, setIsPlaying, updateStoreVolume]);
 
+  // Initialize AI model once
   useEffect(() => {
-    let detectionInterval: NodeJS.Timeout;
+    let isMounted = true;
+    
+    const initializeModel = async () => {
+      if (isInitialized) return;
+      
+      try {
+        setIsLoading(true);
+        setError(null);
+        await initializeHandDetector();
+        if (isMounted) {
+          setIsInitialized(true);
+          setIsLoading(false);
+        }
+      } catch (err) {
+        console.error('Model initialization error:', err);
+        if (isMounted) {
+          setError('Failed to initialize AI model. Please refresh the page.');
+          setIsLoading(false);
+        }
+      }
+    };
+
+    // Only initialize if not already initialized
+    if (!isInitialized) {
+      initializeModel();
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, []); // Remove isInitialized from dependencies to prevent re-initialization
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cleanupHandDetector();
+    };
+  }, []);
+
+  // Handle gesture detection
+  useEffect(() => {
+    if (!isInitialized || !useGestures || !isModelReady()) {
+      // Clear any existing interval
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current);
+        detectionIntervalRef.current = null;
+      }
+      return;
+    }
+
     let gestureCooldown = false;
 
     const runHandDetection = async () => {
-      if (!webcamRef.current?.video || !useGestures || gestureCooldown) return;
+      if (!webcamRef.current?.video || gestureCooldown) return;
 
       try {
         const gesture = await detectHand(webcamRef.current.video);
+        
+        // Update debug information
+        setLightingCondition(getLightingCondition());
+        setAdaptiveThresholds(getAdaptiveThresholds());
+        
         if (gesture) {
           gestureCooldown = true;
           setTimeout(() => gestureCooldown = false, 500);
@@ -139,29 +199,52 @@ const GestureControl: React.FC = () => {
       }
     };
 
-    const setupCamera = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-        await initializeHandDetector();
-        setIsLoading(false);
-        detectionInterval = setInterval(runHandDetection, 100);
-      } catch (err) {
-        console.error('Camera setup error:', err);
-        setError('Camera access required for gesture control');
-        setIsLoading(false);
+    // Start detection interval
+    detectionIntervalRef.current = setInterval(runHandDetection, 100);
+
+    // Cleanup function
+    return () => {
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current);
+        detectionIntervalRef.current = null;
       }
     };
+  }, [isInitialized, useGestures, gestureMap, handleGestureAction]);
 
-    if (useGestures) setupCamera();
-    return () => {
-      clearInterval(detectionInterval);
-    };
-  }, [useGestures, gestureMap, handleGestureAction]);
+  // Handle camera activation when webcam is shown
+  useEffect(() => {
+    if (showWebcam && isInitialized) {
+      setCameraActive(true);
+    } else {
+      setCameraActive(false);
+    }
+  }, [showWebcam, isInitialized]);
+
+  // Prevent webcam from being re-initialized unnecessarily
+  const webcamConstraints = {
+    width: 640,
+    height: 480,
+    facingMode: 'user' as const,
+    frameRate: { ideal: 30, max: 30 }
+  };
 
   const restartDetection = () => {
     setUseGestures(false);
     setTimeout(() => setUseGestures(true), 100);
+  };
+
+  const retryInitialization = () => {
+    setError(null);
+    setIsInitialized(false);
+    setIsLoading(true);
+  };
+
+  const getLightingColor = (condition: string) => {
+    switch (condition) {
+      case 'bright': return 'text-yellow-400';
+      case 'dark': return 'text-blue-400';
+      default: return 'text-green-400';
+    }
   };
 
   return (
@@ -171,8 +254,19 @@ const GestureControl: React.FC = () => {
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-xl text-white flex items-center gap-2">
             <Hand className="w-6 h-6" /> Gesture Control
+            <div className="flex items-center gap-1 ml-2">
+              <Zap className="w-4 h-4 text-green-400" />
+              <span className="text-xs text-green-400">Adaptive AI</span>
+            </div>
           </h3>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowDebugInfo(!showDebugInfo)}
+              className="p-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-full transition-colors"
+              title="Show Debug Info"
+            >
+              <Settings className="w-5 h-5" />
+            </button>
             <button
               onClick={() => setShowTutorial(true)}
               className="p-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-full transition-colors"
@@ -196,7 +290,7 @@ const GestureControl: React.FC = () => {
             >
               {showWebcam ? <Eye className="w-5 h-5" /> : <Camera className="w-5 h-5" />}
             </button>
-            {useGestures && (
+            {useGestures && isModelReady() && (
               <button
                 onClick={restartDetection}
                 className="p-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-full transition-colors"
@@ -207,6 +301,40 @@ const GestureControl: React.FC = () => {
             )}
           </div>
         </div>
+
+        {/* Adaptive Detection Status */}
+        {useGestures && (
+          <div className="bg-gray-700/50 rounded-lg p-3 mb-4">
+            <div className="flex items-center justify-between text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-gray-300">Status:</span>
+                {isLoading ? (
+                  <span className="text-yellow-400 font-medium">Initializing...</span>
+                ) : error ? (
+                  <span className="text-red-400 font-medium">Error</span>
+                ) : (
+                  <span className="text-green-400 font-medium">Ready</span>
+                )}
+              </div>
+              {!isLoading && !error && (
+                <div className="flex items-center gap-4 text-xs text-gray-400">
+                  <span>Lighting: {lightingCondition}</span>
+                  {adaptiveThresholds && (
+                    <>
+                      <span>Confidence: {(adaptiveThresholds.confidence * 100).toFixed(0)}%</span>
+                      <span>Distance: {(adaptiveThresholds.distance * 100).toFixed(0)}%</span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="text-xs text-gray-400 mt-1">
+              {isLoading ? 'Loading AI model...' : 
+               error ? 'Camera access required for gesture control' :
+               'AI automatically adjusts detection sensitivity based on lighting and distance'}
+            </div>
+          </div>
+        )}
 
         {/* Sensitivity slider */}
         <div className="mb-2">
@@ -224,8 +352,51 @@ const GestureControl: React.FC = () => {
           />
         </div>
 
+        {/* Debug Information */}
+        {showDebugInfo && adaptiveThresholds && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="bg-gray-700/30 rounded-lg p-3 text-xs"
+          >
+            <div className="grid grid-cols-2 gap-2 text-gray-300">
+              <div>
+                <span className="text-gray-400">Lighting Condition:</span>
+                <span className={`ml-1 ${getLightingColor(lightingCondition)}`}>
+                  {lightingCondition}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-400">Confidence Threshold:</span>
+                <span className="ml-1">{(adaptiveThresholds.confidence * 100).toFixed(1)}%</span>
+              </div>
+              <div>
+                <span className="text-gray-400">Distance Threshold:</span>
+                <span className="ml-1">{(adaptiveThresholds.distance * 100).toFixed(1)}%</span>
+              </div>
+              <div>
+                <span className="text-gray-400">Detection Mode:</span>
+                <span className="ml-1 text-green-400">Adaptive</span>
+              </div>
+              <div>
+                <span className="text-gray-400">Model Ready:</span>
+                <span className={`ml-1 ${isModelReady() ? 'text-green-400' : 'text-red-400'}`}>
+                  {isModelReady() ? 'Yes' : 'No'}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-400">Camera Active:</span>
+                <span className={`ml-1 ${cameraActive ? 'text-green-400' : 'text-red-400'}`}>
+                  {cameraActive ? 'Yes' : 'No'}
+                </span>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
         <AnimatePresence>
-          {useGestures && showWebcam && (
+          {useGestures && showWebcam && cameraActive && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
@@ -234,19 +405,32 @@ const GestureControl: React.FC = () => {
             >
               {isLoading ? (
                 <div className="absolute inset-0 flex items-center justify-center bg-gray-900/50">
-                  <div className="animate-pulse text-white">Initializing AI model...</div>
+                  <div className="text-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-400 mx-auto mb-2"></div>
+                    <div className="text-white text-sm">Loading AI model...</div>
+                  </div>
                 </div>
               ) : error ? (
                 <div className="absolute inset-0 flex items-center justify-center bg-red-900/20 p-4">
-                  <div className="text-red-400 text-center">{error}</div>
+                  <div className="text-center">
+                    <div className="text-red-400 text-sm mb-2">{error}</div>
+                    <button
+                      onClick={retryInitialization}
+                      className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm transition-colors"
+                    >
+                      Retry
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <>
                   <Webcam
                     ref={webcamRef}
                     className="w-full h-full object-cover"
-                    videoConstraints={{ width: 1280, height: 720, facingMode: 'user' }}
+                    videoConstraints={webcamConstraints}
                     mirrored
+                    screenshotFormat="image/jpeg"
+                    screenshotQuality={0.8}
                   />
                   {lastDetectedGesture && (
                     <motion.div
@@ -268,6 +452,14 @@ const GestureControl: React.FC = () => {
                       <span className="text-white">{successfulAction}</span>
                     </motion.div>
                   )}
+                  {/* Lighting indicator */}
+                  <div className="absolute top-4 left-4 bg-black/50 px-3 py-1 rounded-full text-xs flex items-center gap-1">
+                    <div className={`w-2 h-2 rounded-full ${
+                      lightingCondition === 'bright' ? 'bg-yellow-400' :
+                      lightingCondition === 'dark' ? 'bg-blue-400' : 'bg-green-400'
+                    }`} />
+                    <span className="text-white">{lightingCondition}</span>
+                  </div>
                 </>
               )}
             </motion.div>

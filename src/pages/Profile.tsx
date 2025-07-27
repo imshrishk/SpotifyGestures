@@ -34,6 +34,7 @@ const Profile: React.FC = () => {
   const [topArtists, setTopArtists] = useState<TopItem[]>([]);
   const [recentlyPlayed, setRecentlyPlayed] = useState<TopItem[]>([]);
   const [playlists, setPlaylists] = useState<any[]>([]);
+  const [allPlaylists, setAllPlaylists] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'tracks' | 'artists' | 'recent'>('tracks');
   const [tracksTimeRange, setTracksTimeRange] = useState<TimeRange>('medium_term');
@@ -73,7 +74,8 @@ const Profile: React.FC = () => {
         // Load user's playlists
         const playlistsResponse = await getUserPlaylists();
         if (playlistsResponse && Array.isArray(playlistsResponse)) {
-          setPlaylists(playlistsResponse.slice(0, 6));
+          setAllPlaylists(playlistsResponse); // Store all playlists for count
+          setPlaylists(playlistsResponse.slice(0, 6)); // Display only 6
         }
         
         await Promise.all([
@@ -182,7 +184,7 @@ const Profile: React.FC = () => {
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center">
           <button 
-            onClick={() => navigate('/player')}
+            onClick={() => navigate('/')}
             className="p-2 rounded-full bg-black/30 hover:bg-black/50 mr-4 transition-colors"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -258,7 +260,7 @@ const Profile: React.FC = () => {
                 onClick={() => navigate('/playlists')}
               >
                 <div className="text-gray-400 text-sm mb-1">Playlists</div>
-                <div className="text-xl font-semibold">{playlists.length}</div>
+                <div className="text-xl font-semibold">{allPlaylists.length}</div>
               </div>
               <div className="bg-black/30 p-4 rounded-lg">
                 <div className="text-gray-400 text-sm mb-1">Account Type</div>
@@ -490,4 +492,4 @@ const Profile: React.FC = () => {
   );
 };
 
-export default Profile; 
+export default Profile;

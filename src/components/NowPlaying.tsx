@@ -58,12 +58,33 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
   const [error, setError] = useState<string | null>(null);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [showFeatures, setShowFeatures] = useState<string | null>(null);
+  const [currentContext, setCurrentContext] = useState<string | null>(null);
+  const [playlistName, setPlaylistName] = useState<string | null>(null);
   
   // Use the external ref if provided, otherwise use the internal one
   const albumArtRef = externalAlbumArtRef || internalAlbumArtRef;
   
   // Color thief hook for extracting colors from album art
   const { getColor, initializeColorThief } = useColorThief(albumArtRef);
+
+  // Function to get playlist name
+  const getPlaylistName = async (playlistId: string) => {
+    if (!token) return;
+    try {
+      const response = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        return data.name;
+      }
+    } catch (error) {
+      console.error('Error fetching playlist name:', error);
+    }
+    return null;
+  };
 
   // Initialize color thief when album art loads
   useEffect(() => {
@@ -100,6 +121,44 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
         setProgressMs(state.progress_ms);
         if (!isDragging) {
           setProgress((state.progress_ms / state.item.duration_ms) * 100);
+        }
+        
+        // Extract context information
+        if (state.context) {
+          const contextUri = state.context.uri;
+          if (contextUri) {
+            if (contextUri.includes('playlist')) {
+              const playlistId = contextUri.split(':').pop();
+              if (playlistId) {
+                // Try to get playlist name
+                const name = await getPlaylistName(playlistId);
+                if (name) {
+                  setCurrentContext(`Playlist • ${name}`);
+                  setPlaylistName(name);
+                } else {
+                  setCurrentContext(`Playlist • ${playlistId}`);
+                }
+              }
+            } else if (contextUri.includes('album')) {
+              const albumId = contextUri.split(':').pop();
+              setCurrentContext(`Album • ${albumId}`);
+            } else if (contextUri.includes('artist')) {
+              const artistId = contextUri.split(':').pop();
+              setCurrentContext(`Artist • ${artistId}`);
+            } else if (contextUri.includes('user')) {
+              setCurrentContext('Your Library');
+            } else if (contextUri.includes('spotify:user:spotify:playlist:37i9dQZF1DXcBWIGoYBM5M')) {
+              setCurrentContext('Today\'s Top Hits');
+            } else if (contextUri.includes('spotify:user:spotify:playlist:37i9dQZEVXbMDoHDwVN2tF')) {
+              setCurrentContext('Global Top 50');
+            } else {
+              setCurrentContext('Smart Shuffle');
+            }
+          } else {
+            setCurrentContext('Smart Shuffle');
+          }
+        } else {
+          setCurrentContext('Smart Shuffle');
         }
       }
     } catch (error) {
@@ -517,6 +576,16 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
             >
               {currentTrack.album.name}
             </motion.p>
+            {currentContext && (
+              <motion.div 
+                className="text-xs text-gray-600 bg-gray-800/50 px-2 py-1 rounded-full inline-block"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.5 }}
+              >
+                {playlistName ? `Playlist • ${playlistName}` : currentContext}
+              </motion.div>
+            )}
           </div>
 
           {/* Progress Bar */}

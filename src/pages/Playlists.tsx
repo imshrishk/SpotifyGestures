@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Clock, ListMusic, Music, Plus, Search } from 'lucide-react';
+import { ArrowLeft, Clock, ListMusic, Music, Plus, Search, Play } from 'lucide-react';
 import { getUserPlaylists, createPlaylist } from '../lib/spotify';
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { motion } from 'framer-motion';
@@ -39,11 +39,11 @@ const Playlists: React.FC = () => {
       try {
         setIsLoading(true);
         
-        // Load user playlists
+        // Load user playlists - getUserPlaylists already returns the items array
         const playlistsData = await getUserPlaylists();
-        if (playlistsData?.items) {
-          setPlaylists(playlistsData.items as Playlist[]);
-          setFilteredPlaylists(playlistsData.items as Playlist[]);
+        if (playlistsData && Array.isArray(playlistsData)) {
+          setPlaylists(playlistsData as Playlist[]);
+          setFilteredPlaylists(playlistsData as Playlist[]);
         }
         
         setIsLoading(false);
@@ -76,9 +76,9 @@ const Playlists: React.FC = () => {
       
       // Refresh playlists
       const playlistsData = await getUserPlaylists();
-      if (playlistsData?.items) {
-        setPlaylists(playlistsData.items as Playlist[]);
-        setFilteredPlaylists(playlistsData.items as Playlist[]);
+      if (playlistsData && Array.isArray(playlistsData)) {
+        setPlaylists(playlistsData as Playlist[]);
+        setFilteredPlaylists(playlistsData as Playlist[]);
       }
       setNewPlaylistName('');
     } catch (error) {
@@ -169,7 +169,7 @@ const Playlists: React.FC = () => {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.05 }}
-                  className="bg-gray-800/50 rounded-lg overflow-hidden hover:bg-gray-700/50 transition-colors cursor-pointer"
+                  className="bg-gray-800/50 rounded-lg overflow-hidden hover:bg-gray-700/50 transition-colors cursor-pointer group"
                   onClick={() => navigate(`/playlist/${playlist.id}`)}
                 >
                   <div className="aspect-square relative">
@@ -186,6 +186,18 @@ const Playlists: React.FC = () => {
                     )}
                     <div className="absolute bottom-2 right-2 bg-black/70 text-xs px-2 py-1 rounded-full">
                       {playlist.tracks.total} tracks
+                    </div>
+                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <div className="flex space-x-2">
+                        <button 
+                          className="p-3 bg-green-500 rounded-full transform translate-y-2 group-hover:translate-y-0 transition-transform"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                          }}
+                        >
+                          <Play className="w-6 h-6 text-white" fill="white" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div className="p-4">
@@ -204,4 +216,4 @@ const Playlists: React.FC = () => {
   );
 };
 
-export default Playlists; 
+export default Playlists;

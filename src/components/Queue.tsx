@@ -18,7 +18,7 @@ import {
   BarChart3
 } from 'lucide-react';
 import useSpotifyStore from '../stores/useSpotifyStore';
-import { shufflePlaylist, toggleRepeat, getRecentlyPlayed, addToQueue, searchTracks } from '../lib/spotify';
+import { shufflePlaylist, toggleRepeat, getRecentlyPlayed, addToQueue, searchTracks, removeFromQueue } from '../lib/spotify';
 import { SpotifyApi } from '../lib/spotifyApi';
 
 interface Track {
@@ -91,10 +91,29 @@ const Queue: React.FC = () => {
   const playSong = async (uri: string) => {
     if (!token) return;
     try {
-      if (currentPlaylist && currentPlaylist.uri && currentPlaylist.type === 'playlist') {
-        await SpotifyApi.playSmartly(token, uri, currentPlaylist.uri);
+      // Find the track in the current queue
+      const trackIndex = queue.findIndex(track => track.uri === uri);
+      
+      if (trackIndex !== -1) {
+        // Skip to the specific track in the queue
+        // We need to skip trackIndex + 1 times to get to the target track
+        for (let i = 0; i <= trackIndex; i++) {
+          await fetch('https://api.spotify.com/v1/me/player/next', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          // Small delay to ensure the skip is processed
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
       } else {
-        await SpotifyApi.playSmartly(token, uri);
+        // If track is not in queue, play it directly
+        if (currentPlaylist && currentPlaylist.uri && currentPlaylist.type === 'playlist') {
+          await SpotifyApi.playSmartly(token, uri, currentPlaylist.uri);
+        } else {
+          await SpotifyApi.playSmartly(token, uri);
+        }
       }
     } catch (error) {
       console.error('Error playing track:', error);
@@ -115,7 +134,25 @@ const Queue: React.FC = () => {
   };
 
   const handleRemoveFromQueue = async (trackId: string) => {
-    removeTrackFromQueue(trackId);
+    try {
+      // Find the track in the queue to get its URI
+      const trackToRemove = queue.find(track => track.id === trackId);
+      if (trackToRemove) {
+        const result = await removeFromQueue(trackToRemove.uri);
+        
+        if (result.success) {
+          // Remove from local state immediately for better UX
+          removeTrackFromQueue(trackId);
+          console.log(result.message);
+        } else {
+          // Show the limitation message
+          alert(result.message);
+        }
+      }
+    } catch (error) {
+      console.error('Error removing track from queue:', error);
+      alert('Failed to remove track from queue. Please try again.');
+    }
   };
 
   const performSearch = async (query: string) => {
@@ -396,16 +433,6 @@ const Queue: React.FC = () => {
                       <span>{formatDuration(track.duration_ms)}</span>
                     </div>
                   )}
-                  {/* Play Button */}
-                  <motion.button
-                    className="p-2 bg-green-500 hover:bg-green-600 rounded-full shadow transition-colors flex items-center justify-center mr-1"
-                    whileHover={{ scale: 1.08 }}
-                    whileTap={{ scale: 0.95 }}
-                    title="Play this song"
-                    onClick={e => { e.stopPropagation(); playSong(track.uri); }}
-                  >
-                    <Play className="w-4 h-4 text-white" />
-                  </motion.button>
                   {/* Remove Button */}
                   {activeTab === 'upcoming' && (
                     <motion.button
@@ -416,6 +443,18 @@ const Queue: React.FC = () => {
                       title="Remove from queue"
                     >
                       <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-400" />
+                    </motion.button>
+                  )}
+                  {/* Skip to Track Button */}
+                  {activeTab === 'upcoming' && (
+                    <motion.button
+                      onClick={e => { e.stopPropagation(); playSong(track.uri); }}
+                      className="p-2 hover:bg-blue-500/20 rounded-full transition-colors"
+                      whileHover={{ scale: 1.08 }}
+                      whileTap={{ scale: 0.95 }}
+                      title="Skip to this track"
+                    >
+                      <SkipForward className="w-4 h-4 text-gray-400 hover:text-blue-400" />
                     </motion.button>
                   )}
                   {/* Divider */}

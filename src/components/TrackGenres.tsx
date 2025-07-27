@@ -113,12 +113,17 @@ const TrackGenres: React.FC<TrackGenresProps> = ({
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const failedAttemptsRef = useRef(0);
   const lastTrackRef = useRef<string | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
   
   // Clear timeout on unmount
   useEffect(() => {
     return () => {
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
+      }
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
       }
     };
   }, []);
@@ -136,13 +141,13 @@ const TrackGenres: React.FC<TrackGenresProps> = ({
       setGenres(sessionGenreCache.get(currentTrack.id) || []);
       setError(null);
       setIsLoading(false);
+      setIsInitialized(true);
       return;
     }
     
     try {
       setIsLoading(true);
-      // Start with a general "Loading..." message
-      setError("Loading genres...");
+      setError(null);
       
       // Direct API call to get genres
       const trackGenres = await getTrackGenres(currentTrack.id);
@@ -167,6 +172,7 @@ const TrackGenres: React.FC<TrackGenresProps> = ({
       }
       
       setIsLoading(false);
+      setIsInitialized(true);
     } catch (err: any) {
       console.error('Error fetching track genres:', err);
       
@@ -211,39 +217,52 @@ const TrackGenres: React.FC<TrackGenresProps> = ({
       }
       
       setIsLoading(false);
+      setIsInitialized(true);
     }
   }, [currentTrack?.id, token]);
   
-  // Effect to fetch genres when track changes
+  // Effect to fetch genres when track changes with debouncing
   useEffect(() => {
     if (!currentTrack?.id) return;
     
-    // Reset state when track changes
-    setGenres([]);
-    if (retryTimeoutRef.current) {
-      clearTimeout(retryTimeoutRef.current);
-      retryTimeoutRef.current = null;
+    // Clear any existing debounce
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
     }
     
-    // Don't immediately fetch if we've had multiple recent failures
-    // This helps avoid cascading rate limit errors
-    if (failedAttemptsRef.current > 5) {
-      const cooldownDelay = 10000; // 10 seconds cooldown
-      setError('Cooling down after rate limiting...');
+    // Debounce the state changes to prevent jumping
+    debounceRef.current = setTimeout(() => {
+      // Reset state when track changes
+      setGenres([]);
+      setError(null);
+      setIsLoading(false);
+      setIsInitialized(false);
       
-      retryTimeoutRef.current = setTimeout(() => {
-        failedAttemptsRef.current = 0; // Reset counter after cooldown
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+      
+      // Don't immediately fetch if we've had multiple recent failures
+      // This helps avoid cascading rate limit errors
+      if (failedAttemptsRef.current > 5) {
+        const cooldownDelay = 10000; // 10 seconds cooldown
+        setError('Cooling down after rate limiting...');
+        
+        retryTimeoutRef.current = setTimeout(() => {
+          failedAttemptsRef.current = 0; // Reset counter after cooldown
+          fetchGenres(0);
+        }, cooldownDelay);
+      } else {
         fetchGenres(0);
-      }, cooldownDelay);
-    } else {
-      fetchGenres(0);
-    }
-    
-    // Clear selection when track changes
-    if (selectedGenre && onGenreClick) {
-      setSelectedGenre(null);
-      onGenreClick('');
-    }
+      }
+      
+      // Clear selection when track changes
+      if (selectedGenre && onGenreClick) {
+        setSelectedGenre(null);
+        onGenreClick('');
+      }
+    }, 100); // 100ms debounce
     
   }, [currentTrack?.id, token, onGenreClick, selectedGenre, fetchGenres]);
   
@@ -269,11 +288,7 @@ const TrackGenres: React.FC<TrackGenresProps> = ({
   if (!currentTrack) {
     return null;
   }
-  
-  // Create a dummy array of genres if none are available (helps with UI testing)
-  const dummyGenres = ['Loading genre information...'];
-  const displayGenres = genres.length > 0 ? genres : (error && !isLoading) ? [] : dummyGenres;
-  
+
   return (
     <div className={`${className} mt-4`}>
       {showTitle && (
@@ -285,31 +300,17 @@ const TrackGenres: React.FC<TrackGenresProps> = ({
         </div>
       )}
       
-      {error ? (
-        <div className="text-xs text-gray-400 mb-2 flex items-center justify-between">
-          <span>{error}</span>
-          {failedAttemptsRef.current > 0 && (
-            <button 
-              onClick={handleRetry}
-              className="text-xs text-blue-400 hover:text-blue-300 ml-2 underline"
-            >
-              Retry
-            </button>
-          )}
-        </div>
-      ) : null}
-      
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 min-h-[32px] transition-all duration-200">
         {isLoading && genres.length === 0 ? (
-          // Loading state
+          // Loading state with fixed height to prevent jumping
           <>
             <div className="animate-pulse bg-white/10 rounded-full h-5 w-16"></div>
             <div className="animate-pulse bg-white/10 rounded-full h-5 w-20"></div>
             <div className="animate-pulse bg-white/10 rounded-full h-5 w-14"></div>
           </>
-        ) : displayGenres.length > 0 ? (
+        ) : genres.length > 0 ? (
           // Display genres
-          displayGenres.map((genre, index) => {
+          genres.map((genre, index) => {
             const bgColor = getGenreColor(genre);
             const textColor = getTextColor(bgColor);
             const isSelected = selectedGenre === genre;
@@ -337,9 +338,25 @@ const TrackGenres: React.FC<TrackGenresProps> = ({
               </motion.div>
             );
           })
-        ) : (
+        ) : error ? (
+          // Error state with fixed height
+          <div className="text-xs text-gray-400 flex items-center justify-between w-full">
+            <span>{error}</span>
+            {failedAttemptsRef.current > 0 && (
+              <button 
+                onClick={handleRetry}
+                className="text-xs text-blue-400 hover:text-blue-300 ml-2 underline"
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        ) : isInitialized ? (
           // No genres found and not loading
-          !isLoading && <div className="text-xs text-gray-400">No genres found</div>
+          <div className="text-xs text-gray-400">No genres found</div>
+        ) : (
+          // Initial loading state
+          <div className="text-xs text-gray-400">Loading...</div>
         )}
       </div>
       
@@ -363,4 +380,4 @@ const TrackGenres: React.FC<TrackGenresProps> = ({
   );
 };
 
-export default TrackGenres; 
+export default TrackGenres;

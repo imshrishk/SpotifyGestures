@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Music, Clock, RefreshCw, XCircle } from 'lucide-react';
+import { Music, Clock, RefreshCw, XCircle, SkipForward } from 'lucide-react';
 import useSpotifyStore from '../stores/useSpotifyStore';
-import { getQueue } from '../lib/spotify';
+import { getQueue, removeFromQueue } from '../lib/spotify';
 
 interface QueueDisplayProps {
   onClose: () => void;
@@ -17,6 +17,7 @@ interface QueueItem {
     images: { url: string }[];
   };
   duration_ms: number;
+  uri: string;
 }
 
 const QueueDisplay: React.FC<QueueDisplayProps> = ({ onClose }) => {
@@ -24,7 +25,7 @@ const QueueDisplay: React.FC<QueueDisplayProps> = ({ onClose }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const { currentTrack, removeTrackFromQueue } = useSpotifyStore();
+  const { currentTrack, removeTrackFromQueue, token } = useSpotifyStore();
 
   const fetchQueue = useCallback(async () => {
     try {
@@ -48,6 +49,56 @@ const QueueDisplay: React.FC<QueueDisplayProps> = ({ onClose }) => {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await fetchQueue();
+  };
+
+  const handleRemoveFromQueue = async (trackId: string) => {
+    try {
+      // Find the track in the queue to get its URI
+      const trackToRemove = queue.find(track => track.id === trackId);
+      if (trackToRemove) {
+        const result = await removeFromQueue(trackToRemove.uri);
+        
+        if (result.success) {
+          // Refresh the queue after removal
+          await fetchQueue();
+          console.log(result.message);
+        } else {
+          // Show the limitation message
+          setError(result.message);
+          setTimeout(() => setError(null), 4000);
+        }
+      }
+    } catch (error) {
+      console.error('Error removing track from queue:', error);
+      setError('Failed to remove track from queue. Please try again.');
+      setTimeout(() => setError(null), 3000);
+    }
+  };
+
+  const handleSkipToTrack = async (trackId: string) => {
+    try {
+      const trackIndex = queue.findIndex(q => q.id === trackId);
+      if (trackIndex !== -1 && token) {
+        // Skip to the specific track in the queue
+        // We need to skip trackIndex + 1 times to get to the target track
+        for (let i = 0; i <= trackIndex; i++) {
+          await fetch('https://api.spotify.com/v1/me/player/next', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          // Small delay to ensure the skip is processed
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        // Refresh the queue after skipping
+        await fetchQueue();
+      }
+    } catch (error) {
+      console.error('Error skipping to track:', error);
+      setError('Failed to skip to track');
+      setTimeout(() => setError(null), 3000);
+    }
   };
 
   const formatDuration = (ms: number) => {
@@ -161,11 +212,18 @@ const QueueDisplay: React.FC<QueueDisplayProps> = ({ onClose }) => {
                         {formatDuration(track.duration_ms)}
                       </span>
                       <button
-                        onClick={() => removeTrackFromQueue(track.id)}
+                        onClick={() => handleRemoveFromQueue(track.id)}
                         className="p-1 rounded-full hover:bg-white/10 transition-colors"
                         title="Remove from Queue"
                       >
                         <XCircle className="w-4 h-4 text-gray-400 hover:text-red-500" />
+                      </button>
+                      <button
+                        onClick={() => handleSkipToTrack(track.id)}
+                        className="p-1 rounded-full hover:bg-white/10 transition-colors"
+                        title="Skip to this track"
+                      >
+                        <SkipForward className="w-4 h-4 text-gray-400 hover:text-blue-500" />
                       </button>
                     </motion.div>
                   ))}
@@ -188,4 +246,4 @@ const QueueDisplay: React.FC<QueueDisplayProps> = ({ onClose }) => {
   );
 };
 
-export default QueueDisplay; 
+export default QueueDisplay;
