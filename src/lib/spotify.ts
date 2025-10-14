@@ -71,12 +71,21 @@ const requestQueue: Array<() => Promise<any>> = [];
 let isProcessingQueue = false;
 let lastRequestTime = 0;
 const MIN_REQUEST_INTERVAL = 100; // Minimum 100ms between requests
-const RATE_LIMIT_RESET_TIME = 60 * 1000; // Default 1 minute for rate limit reset
 
 // Global counter to track consecutive API failures
 let consecutiveFailures = 0;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const COOL_DOWN_PERIOD = 10000; // 10 seconds cool down after multiple failures
+
+let lastApiCall = 0;
+const MIN_API_INTERVAL = 500; // ms
+async function rateLimitedFetch(url: string, options?: RequestInit) {
+  const now = Date.now();
+  const wait = Math.max(0, MIN_API_INTERVAL - (now - lastApiCall));
+  if (wait > 0) await new Promise(res => setTimeout(res, wait));
+  lastApiCall = Date.now();
+  return fetch(url, options);
+}
 
 if (!clientId || !redirectUri) {
   throw new Error("Spotify client ID or redirect URI is missing in the environment variables.");
@@ -215,45 +224,17 @@ export const getRecommendationsFromUserProfile = async () => {
     });
     
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        // Token expired or forbidden, force re-auth
+        refreshToken();
+        throw new Error('Token expired or forbidden');
+      }
       throw new Error(`Failed to get recommendations: ${response.status}`);
     }
-    
     return await response.json();
   } catch (error: any) {
     console.error('Error getting personalized recommendations:', error);
     // Fall back to genre-based recommendations if personal ones fail
-    return getFallbackRecommendations();
-  }
-};
-
-const getGenreBasedRecommendations = async () => {
-  try {
-    // Use only verified working genres in the correct format
-    const verifiedGenres = [
-      'pop', 'rock', 'electronic', 'hip-hop', 'indie', 
-      'alternative', 'jazz', 'metal', 'dance', 'r-n-b',
-      'soul', 'country', 'folk', 'reggae', 'disco',
-      'classical', 'blues'
-    ];
-    const randomGenres: string[] = [];
-    
-    // Pick 2 random genres from the verified list
-    for (let i = 0; i < 2; i++) {
-      const randomIndex = Math.floor(Math.random() * verifiedGenres.length);
-      randomGenres.push(verifiedGenres[randomIndex]);
-      verifiedGenres.splice(randomIndex, 1); // Remove to avoid duplicates
-    }
-    
-    console.log('Using genres for recommendations:', randomGenres.join(', '));
-    
-    // Use queueRequest to throttle API calls
-    return await queueRequest(() => spotify.getRecommendations({
-      seed_genres: randomGenres,
-      limit: 10 // Limit the number of recommendations
-    } as RecommendationsOptions));
-  } catch (error) {
-    console.error('Error getting genre-based recommendations:', error);
-    // Fall back to generic recommendations or an empty array if genre-based also fails
     return getFallbackRecommendations();
   }
 };
@@ -1016,166 +997,135 @@ export const getAudioAnalysis = async (trackId: string) => {
   }
 };
 
-// Helper function to provide default audio data
-const getDefaultAudioData = () => ({
-  beats: [],
-  bars: [],
-  tatums: [],
-  sections: [],
-  segments: []
-});
+const sessionGenreCache = new Map<string, string[]>();
 
-// Helper function to provide default audio analysis
-const getDefaultAnalysis = () => ({
-  track: {
-    duration: 0,
-    start_of_fade_out: 0,
-    end_of_fade_in: 0,
-    loudness: 0,
-    tempo: 0,
-    tempo_confidence: 0,
-    time_signature: 0,
-    time_signature_confidence: 0,
-    key: 0,
-    key_confidence: 0,
-    mode: 0,
-    mode_confidence: 0
-  },
-  bars: [],
-  beats: [],
-  sections: [],
-  segments: [],
-  tatums: []
-});
 
+// Recursively get genres for all artists and their related artists (up to 2 levels deep)
+async function getAllArtistsGenres(artistIds: string[], depth = 0, maxDepth = 2, seen = new Set<string>()): Promise<string[]> {
+  if (depth > maxDepth) return [];
+  const genres: string[] = [];
+  for (const artistId of artistIds) {
+    if (seen.has(artistId)) continue;
+    seen.add(artistId);
+    try {
+      const artist = await spotify.getArtist(artistId);
+      if (artist && artist.genres && artist.genres.length > 0) {
+        genres.push(...artist.genres);
+      }
+      // Recursively get related artists
+      if (depth < maxDepth) {
+        const related = await spotify.getArtistRelatedArtists(artistId);
+        if (Array.isArray(related)) {
+          const relatedIds = related.map((a: { id: string }) => a.id).filter(Boolean);
+          const relatedGenres = await getAllArtistsGenres(relatedIds, depth + 1, maxDepth, seen);
+          genres.push(...relatedGenres);
+        }
+      }
+    } catch {
+      // Ignore errors for individual artists
+    }
+  }
+  return Array.from(new Set(genres));
+}
+
+// Main genre function using Vexcited/better-spotify-genres logic, fallback to backup
 export const getTrackGenres = async (trackId: string): Promise<string[]> => {
+  if (sessionGenreCache.has(trackId)) {
+    return sessionGenreCache.get(trackId)!;
+  }
   if (!(await ensureValidToken())) {
-    console.warn('Token not valid for getTrackGenres.');
     return [];
   }
-  
   try {
     const track = await spotify.getTrack(trackId);
-    if (track && track.artists && track.artists.length > 0) {
-      const artistIds = track.artists.map((artist: SpotifyApi.ArtistObjectSimplified) => artist.id).filter(Boolean) as string[];
-      if (artistIds.length > 0) {
-        const spotifyGenres = await getGenresFromArtists(artistIds);
-        if (spotifyGenres.length > 0) {
-          return spotifyGenres;
-        }
-      }
+    if (!track || !track.artists) {
+      return [];
     }
-    
-    // If Spotify genres failed, try backup sources
-    if (track && track.artists && track.artists.length > 0) {
-      const artistName = track.artists[0].name;
-      const trackName = track.name;
-      
-      try {
-        const { getCachedBackupGenres } = await import('./genreBackup');
-        const backupResult = await getCachedBackupGenres(trackName, artistName);
-        
-        if (backupResult.success && backupResult.genres.length > 0) {
-          console.log(`Using backup genres from ${backupResult.source} for ${trackName} by ${artistName}`);
-          return backupResult.genres;
-        }
-      } catch (backupError) {
-        console.error('Backup genre fetch failed:', backupError);
-      }
+    const artistIds = track.artists.map((a: { id: string }) => a.id).filter(Boolean);
+    // Try all artists and their related artists (recursively)
+    const genres = await getAllArtistsGenres(artistIds);
+    if (genres.length > 0) {
+      sessionGenreCache.set(trackId, genres);
+      return genres.slice(0, 5);
     }
-    
-    // Final fallback to default genres
-    return getDefaultGenresByArtistName(track.artists.map((a: SpotifyApi.ArtistObjectSimplified) => a.name));
-  } catch (error) {
-    console.error('Error getting track genres:', error);
-    
-    // Try backup sources even if Spotify track fetch fails
+    // Fallback: use backup genre logic (MusicBrainz, Last.fm, etc.)
     try {
-      // We need track info for backup, so try to get it from current playback
-      const currentTrack = await getCurrentTrack();
-      if (currentTrack?.item) {
-        const artistName = currentTrack.item.artists[0]?.name;
-        const trackName = currentTrack.item.name;
-        
-        if (artistName && trackName) {
-          const { getCachedBackupGenres } = await import('./genreBackup');
-          const backupResult = await getCachedBackupGenres(trackName, artistName);
-          
-          if (backupResult.success && backupResult.genres.length > 0) {
-            console.log(`Using backup genres from ${backupResult.source} for ${trackName} by ${artistName}`);
-            return backupResult.genres;
-          }
-        }
+      const { getBackupGenres } = await import('./genreBackup');
+      const result = await getBackupGenres(track.name, track.artists[0].name);
+      if (result.success && result.genres.length > 0) {
+        sessionGenreCache.set(trackId, result.genres);
+        return result.genres.slice(0, 5);
       }
-    } catch (backupError) {
-      console.error('Backup genre fetch failed:', backupError);
+    } catch {
+      // Ignore backup errors
     }
-    
-    // Final fallback to empty array
+    sessionGenreCache.set(trackId, []);
+    return [];
+  } catch {
     return [];
   }
 };
 
-// Utility to get genres from artists, with caching and fallback
-async function getGenresFromArtists(artistIds: string[]): Promise<string[]> {
-  const allGenres = new Set<string>();
-  const token = await ensureValidToken();
-  if (!token) return [];
-
-  // Fetch artist details in batches to get genres
-  const batchSize = 50; // Spotify API allows up to 50 artists per request
-  for (let i = 0; i < artistIds.length; i += batchSize) {
-    const batch = artistIds.slice(i, i + batchSize);
+if (!spotify.getArtist) {
+  spotify.getArtist = async function(artistId: string) {
+    console.debug('[spotify.getArtist] Fetching artist:', artistId);
     try {
-      const response = await queueRequest(() => spotify.getArtists(batch));
-      if (response && (response as SpotifyApi.MultipleArtistsResponse).artists) {
-        (response as SpotifyApi.MultipleArtistsResponse).artists.forEach((artist: SpotifyApi.ArtistObjectFull) => {
-          if (artist && artist.genres) {
-            artist.genres.forEach(genre => allGenres.add(genre));
-          }
-        });
+      const res = await rateLimitedFetch(`https://api.spotify.com/v1/artists/${artistId}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('spotify_token')}` }
+      });
+      if (!res.ok) {
+        console.warn('[spotify.getArtist] Failed to fetch artist:', artistId, res.status);
+        return null;
       }
-    } catch (error) {
-      console.error('Error fetching artist batch for genres:', error);
+      const data = await res.json();
+      console.debug('[spotify.getArtist] Artist data:', data);
+      return data;
+    } catch (e) {
+      console.error('[spotify.getArtist] Error:', e);
+      return null;
     }
-  }
-  return Array.from(allGenres);
-}
-
-// Fallback for getting genres by artist name if Spotify API fails or no genres found
-function getDefaultGenresByArtistName(artistNames: string[]): string[] {
-  const genresMap: { [key: string]: string[] } = {
-    // A mapping of artist names (or keywords) to typical genres
-    // This is a simplified fallback and won't be comprehensive
-    'Pop': ['pop'],
-    'Rock': ['rock', 'alternative'],
-    'Hip Hop': ['hip-hop', 'rap'],
-    'Electronic': ['electronic', 'dance'],
-    'Jazz': ['jazz'],
-    'Classical': ['classical'],
-    'Country': ['country'],
-    'R&B': ['r-n-b', 'soul'],
-    'Blues': ['blues'],
-    'Folk': ['folk'],
-    'Reggae': ['reggae'],
-    'Metal': ['metal'],
-    'Indie': ['indie'],
-    'Alternative': ['alternative'],
-    'Dance': ['dance'],
-    'Soul': ['soul'],
-    'Disco': ['disco'],
   };
-
-  const defaultGenres: string[] = [];
-  artistNames.forEach(name => {
-    for (const keyword in genresMap) {
-      if (name.toLowerCase().includes(keyword.toLowerCase())) {
-        defaultGenres.push(...genresMap[keyword]);
-        break;
+}
+if (!spotify.getArtistRelatedArtists) {
+  spotify.getArtistRelatedArtists = async function(artistId: string) {
+    console.debug('[spotify.getArtistRelatedArtists] Fetching related artists for:', artistId);
+    try {
+      const res = await rateLimitedFetch(`https://api.spotify.com/v1/artists/${artistId}/related-artists`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('spotify_token')}` }
+      });
+      if (!res.ok) {
+        console.warn('[spotify.getArtistRelatedArtists] Failed to fetch related artists:', artistId, res.status);
+        return [];
       }
+      const data = await res.json();
+      console.debug('[spotify.getArtistRelatedArtists] Related artists data:', data);
+      return data.artists || [];
+    } catch (e) {
+      console.error('[spotify.getArtistRelatedArtists] Error:', e);
+      return [];
     }
-  });
-  return [...new Set(defaultGenres)]; // Return unique genres
+  };
+}
+// Polyfill for spotify.getTrack (needed for genre fetching)
+if (!spotify.getTrack) {
+  spotify.getTrack = async function(trackId: string) {
+    console.debug('[spotify.getTrack] Fetching track:', trackId);
+    try {
+      const res = await rateLimitedFetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('spotify_token')}` }
+      });
+      if (!res.ok) {
+        console.warn('[spotify.getTrack] Failed to fetch track:', trackId, res.status);
+        return null;
+      }
+      const data = await res.json();
+      console.debug('[spotify.getTrack] Track data:', data);
+      return data;
+    } catch (e) {
+      console.error('[spotify.getTrack] Error:', e);
+      return null;
+    }
+  };
 }
 
 // Rate limiting and request queuing
@@ -1230,48 +1180,6 @@ function queueRequest<T>(requestFn: () => Promise<T>): Promise<T> {
         requestQueue.push(wrappedRequest);
         processRequestQueue();
     });
-}
-
-async function fetchWithRetry(
-  url: string, 
-  options: RequestInit, 
-  maxRetries = 5, 
-  initialDelayMs = 2000
-): Promise<Response> {
-  let retries = 0;
-  let delay = initialDelayMs;
-
-  while (retries < maxRetries) {
-    try {
-      const response = await fetch(url, options);
-      if (response.ok) {
-        return response;
-      } else if (response.status === 429) { // Rate limit exceeded
-        const retryAfter = response.headers.get('Retry-After');
-        const retryDelay = retryAfter ? parseInt(retryAfter) * 1000 : delay; // Use Retry-After header if available
-        console.warn(`Rate limit exceeded. Retrying after ${retryDelay / 1000} seconds.`);
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
-        delay *= 2; // Exponential backoff
-      } else if (response.status >= 500) { // Server error
-        console.warn(`Server error ${response.status}. Retrying in ${delay / 1000} seconds.`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        delay *= 2; // Exponential backoff
-      } else {
-        // For other client errors (4xx), don't retry
-        throw new Error(`API error: ${response.status} - ${response.statusText}`);
-      }
-    } catch (error: any) {
-      console.error('Fetch error:', error);
-      if (error.message.startsWith('API error')) {
-        throw error; // Don't retry for specific API errors
-      }
-      console.warn(`Network error. Retrying in ${delay / 1000} seconds.`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      delay *= 2; // Exponential backoff
-    }
-    retries++;
-  }
-  throw new Error(`Failed to fetch ${url} after ${maxRetries} retries.`);
 }
 
 export const playTrack = async (
@@ -1435,9 +1343,12 @@ export const searchTracks = async (query: string, limit = 10) => {
     });
 
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        refreshToken();
+        throw new Error('Token expired or forbidden');
+      }
       throw new Error(`Failed to search tracks: ${response.status}`);
     }
-
     const data = await response.json();
     return data.tracks?.items || [];
   } catch (error) {

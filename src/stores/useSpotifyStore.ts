@@ -37,7 +37,7 @@ interface AudioAnalysis {
   }>;
 }
 
-const SOCKET_URL = 'http://localhost:3001';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3001';
 
 interface SpotifyState {
   token: string | null;
@@ -153,25 +153,26 @@ export const useSpotifyStore = create<SpotifyState>()(
         setAudioFeatures: (audioFeatures) => set({ audioFeatures }),
         setAudioAnalysis: (audioAnalysis) => set({ audioAnalysis }),
         initializeSocket: () => {
+          // Only try to connect if SOCKET_URL is set and not empty
+          if (!SOCKET_URL) {
+            console.warn('Socket URL not set, skipping socket connection.');
+            return;
+          }
           try {
             const socket = io(SOCKET_URL, {
               timeout: 5000,
               forceNew: true,
             });
-            
             socket.on('connect', () => {
               console.log('Socket connected successfully');
             });
-            
             socket.on('connect_error', (error) => {
               console.warn('Socket connection failed:', error.message);
-              // Don't set the socket if connection fails
+              // Optionally, set error state or disable socket features
             });
-            
             socket.on('player-state-update', (state) => {
               set(state);
             });
-            
             set({ socket });
           } catch (error) {
             console.warn('Failed to initialize socket:', error);
