@@ -1,28 +1,35 @@
-const charset = "abcdefghijklmnopqrstuvwxyz0123456789";
-
-const generateRandomString = (): string => {
-    let text = "";
-    for (var i = 0; i <= 16; i++)
-        text += charset.charAt(Math.floor(Math.random() * charset.length));
-    return text;
+function base64URLEncode(str: ArrayBuffer): string {
+    return btoa(String.fromCharCode(...new Uint8Array(str)))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
 }
 
-interface AuthCredentials {
-    client_id: string;
-    client_secret: string;
-    redirect_uri: string;
-    auth_endpoint: string;
-    response_type: string;
-    state: string;
-    scope: string;
+export async function generateCodeChallenge(verifier: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(verifier);
+    const digest = await window.crypto.subtle.digest('SHA-256', data);
+    return base64URLEncode(digest);
+}
+
+export function generateCodeVerifier(length = 128): string {
+    // Use a conservative charset matching the tests: alphanumeric plus - and _
+    const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    let result = '';
+    const array = new Uint32Array(length);
+    window.crypto.getRandomValues(array);
+    for (let i = 0; i < length; i++) {
+        result += charset[array[i] % charset.length];
+    }
+    return result;
 }
 
 export const authCreds = {
     client_id: import.meta.env.VITE_SPOTIFY_CLIENT_ID,
-    client_secret: import.meta.env.VITE_SPOTIFY_CLIENT_SECRET,
     redirect_uri: import.meta.env.VITE_REDIRECT_URI || 'http://localhost:5173/callback',
-    auth_endpoint: 'https://accounts.spotify.com/authorize',
-    response_type: 'token',
+    auth_endpoint: import.meta.env.VITE_SPOTIFY_AUTH_ENDPOINT || 'https://accounts.spotify.com/authorize',
+    token_endpoint: import.meta.env.VITE_SPOTIFY_TOKEN_ENDPOINT || 'https://accounts.spotify.com/api/token',
+    response_type: 'code',
     state: 'spotify-auth',
     scope: [
         'user-read-email',
@@ -43,4 +50,14 @@ export const authCreds = {
         'streaming',
         'app-remote-control'
     ].join(' ')
-}; 
+};
+
+// Proactively log when critical envs are missing to aid debugging in dev
+try {
+    if (!authCreds.client_id) {
+        console.error('[authCreds] Missing VITE_SPOTIFY_CLIENT_ID. Ensure .env.local is loaded and server restarted.');
+    }
+    if (!authCreds.redirect_uri) {
+        console.error('[authCreds] Missing VITE_REDIRECT_URI. Set it in .env.local (e.g., http://localhost:5173/callback)');
+    }
+} catch {}

@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react';
 import io, { Socket } from 'socket.io-client';
 
-const SOCKET_URL = 'http://localhost:3001'; // Your server URL
+const SOCKET_URL = (import.meta as any)?.env?.VITE_SOCKET_URL ?? null;
 
 export const useSocket = () => {
   const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
+    if (!SOCKET_URL) {
+      console.warn('Socket URL not set, skipping socket connection.');
+      return;
+    }
     try {
       const newSocket = io(SOCKET_URL, {
         timeout: 5000,

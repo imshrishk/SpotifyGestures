@@ -1,10 +1,10 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, Heart, ListMusic, Share2, BarChart, Waves, CircleDot, Sparkles, Music, Plus, AlertCircle, Check as CheckIcon } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, Heart, ListMusic, Share2, BarChart, Waves, CircleDot, Sparkles, AlertCircle } from 'lucide-react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import { useColorThief } from '../hooks/useColorThief';
 import useSpotifyStore from '../stores/useSpotifyStore';
-import { playPause, nextTrack, previousTrack, setVolume, shufflePlaylist, toggleRepeat, likeTrack, getCurrentTrack, seekToPosition } from '../lib/spotify';
+import { playPause, nextTrack, previousTrack, shufflePlaylist, toggleRepeat, likeTrack, getCurrentTrack, seekToPosition, type PlaybackState } from '../lib/spotify';
 import { SpotifyApi } from '../lib/spotifyApi';
 import AudioVisualizer from './AudioVisualizer';
 import PlaylistManager from './PlaylistManager';
@@ -13,28 +13,9 @@ interface NowPlayingProps {
   albumArtRef?: React.RefObject<HTMLImageElement>;
 }
 
-// Define interface for a track
-interface TrackInfo {
-  id: string;
-  name: string;
-  artists: { 
-    name: string;
-    id?: string;
-  }[];
-  uri: string;
-  duration_ms?: number;
-  albumName: string;
-  albumImage: string;
-  audioFeatures?: {
-    energy?: number;
-    danceability?: number;
-    valence?: number;
-    acousticness?: number;
-    tempo?: number;
-    key?: number;
-    mode?: number;
-  };
-}
+
+
+
 
 const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRef }) => {
   const { currentTrack, isPlaying, volume, setVolume, setIsPlaying, setProgressMs, token } = useSpotifyStore();
@@ -44,8 +25,8 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
   const [isLiked, setIsLiked] = useState(false);
   const [isHoveringArtwork, setIsHoveringArtwork] = useState(false);
   const [showPlaylists, setShowPlaylists] = useState(false);
-  const [showShareMenu, setShowShareMenu] = useState(false);
-  const [playbackState, setPlaybackState] = useState<any>(null);
+
+    const [playbackState, setPlaybackState] = useState<PlaybackState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragProgress, setDragProgress] = useState(0);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
@@ -55,9 +36,9 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
   const [visualizerStyle, setVisualizerStyle] = useState<'bars' | 'wave' | 'circles' | 'particles'>('bars');
   const [visualizerColor, setVisualizerColor] = useState<string>('green');
   const availableColors = ['green', 'blue', 'purple', 'pink', 'red', 'orange', 'yellow'];
-  const [error, setError] = useState<string | null>(null);
-  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
-  const [showFeatures, setShowFeatures] = useState<string | null>(null);
+
+
+
   const [currentContext, setCurrentContext] = useState<string | null>(null);
   const [playlistName, setPlaylistName] = useState<string | null>(null);
   
@@ -67,31 +48,13 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
   // Color thief hook for extracting colors from album art
   const { getColor, initializeColorThief } = useColorThief(albumArtRef);
 
-  // Function to get playlist name
-  const getPlaylistName = async (playlistId: string) => {
-    if (!token) return;
-    try {
-      const response = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        return data.name;
-      }
-    } catch (error) {
-      console.error('Error fetching playlist name:', error);
-    }
-    return null;
-  };
-
   // Initialize color thief when album art loads
   useEffect(() => {
-    if (albumArtRef.current && currentTrack?.album?.images?.[0]?.url) {
+    const imageUrl = currentTrack?.album?.images?.[0]?.url;
+    if (albumArtRef.current && imageUrl) {
       initializeColorThief();
     }
-  }, [currentTrack?.album?.images?.[0]?.url, initializeColorThief]);
+  }, [currentTrack?.album?.images, albumArtRef, initializeColorThief]);
 
   // Extract and apply colors when available
   useEffect(() => {
@@ -103,7 +66,7 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
         document.documentElement.style.setProperty('--primary-color', colorHex);
       }
     }
-  }, [currentTrack?.album?.images?.[0]?.url, getColor]);
+  }, [albumArtRef, getColor]);
 
   const formatTime = (ms: number) => {
     if (!ms) return '0:00';
@@ -115,7 +78,7 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
 
   const updatePlaybackState = useCallback(async () => {
     try {
-      const state = await getCurrentTrack();
+      const state = await getCurrentTrack() as PlaybackState;
       if (state?.item && state.progress_ms !== null && state.item.duration_ms) {
         setPlaybackState(state);
         setProgressMs(state.progress_ms);
@@ -129,13 +92,25 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
           if (contextUri) {
             if (contextUri.includes('playlist')) {
               const playlistId = contextUri.split(':').pop();
-              if (playlistId) {
+              if (playlistId && token) {
                 // Try to get playlist name
-                const name = await getPlaylistName(playlistId);
-                if (name) {
-                  setCurrentContext(`Playlist • ${name}`);
-                  setPlaylistName(name);
-                } else {
+                try {
+                  const response = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}`, {
+                    headers: {
+                      'Authorization': `Bearer ${token}`
+                    }
+                  });
+                  if (response.ok) {
+                    const data = await response.json();
+                    if (data.name) {
+                      setCurrentContext(`Playlist • ${data.name}`);
+                      setPlaylistName(data.name);
+                    } else {
+                      setCurrentContext(`Playlist • ${playlistId}`);
+                    }
+                  }
+                } catch (error) {
+                  console.error('Error fetching playlist name:', error);
                   setCurrentContext(`Playlist • ${playlistId}`);
                 }
               }
@@ -164,7 +139,7 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
     } catch (error) {
       console.error('Error updating playback state:', error);
     }
-  }, [isDragging, setProgressMs]);
+  }, [isDragging, setProgressMs, token]);
 
   useEffect(() => {
     updatePlaybackState();
@@ -348,91 +323,18 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
     return colorMap[colorName] || colorMap.green;
   };
 
-  // Handle adding tracks to queue
-  const addToQueue = async (uri: string, id: string) => {
-    if (!token) {
-      setError('Authentication error. Please log in again.');
-      return;
-    }
-    
-    try {
-      setSelectedTrackId(id); // Show loading state
-      const response = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(uri)}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to add to queue: ${response.status}`);
-      }
-      
-      // Show success for a moment
-      setTimeout(() => setSelectedTrackId(null), 1500);
-    } catch (err) {
-      console.error('Failed to add to queue:', err);
-      setSelectedTrackId(null);
-      setError('Could not add to queue. Make sure Spotify is playing.');
-      setTimeout(() => setError(null), 3000);
-    }
-  };
-
   // Handle playing a track immediately
   const playSongNow = async (uri: string) => {
-    if (!token) {
-      setError('Authentication error. Please log in again.');
-      return;
-    }
+    if (!token) return;
     
     try {
       await SpotifyApi.playSmartly(token, uri);
     } catch (err) {
       console.error('Failed to play track:', err);
-      setError('Could not play this track. Make sure Spotify is active on a device.');
-      setTimeout(() => setError(null), 3000);
     }
   };
 
-  // Toggle showing audio features for a track
-  const toggleFeatures = (id: string) => {
-    if (showFeatures === id) {
-      setShowFeatures(null);
-    } else {
-      setShowFeatures(id);
-    }
-  };
 
-  // Format percentage value with % sign
-  const formatPercentage = (value: number | undefined | null) => {
-    if (value === undefined || value === null) return '--';
-    return `${Math.round(value * 100)}%`;
-  };
-
-  // Format tempo (BPM)
-  const formatTempo = (tempo: number | undefined | null) => {
-    if (tempo === undefined || tempo === null) return '--';
-    return `${Math.round(tempo)} BPM`;
-  };
-
-  // Convert musical key number to note name
-  const keyToNoteName = (key: number | undefined | null, mode: number | undefined | null) => {
-    if (key === undefined || key === null) return 'Unknown';
-    
-    const keyNames = ['C', 'C♯/D♭', 'D', 'D♯/E♭', 'E', 'F', 'F♯/G♭', 'G', 'G♯/A♭', 'A', 'A♯/B♭', 'B'];
-    const modeName = mode === 1 ? 'Major' : 'Minor';
-    
-    return `${keyNames[key]} ${modeName}`;
-  };
-
-  // Get a color based on feature value (0-1)
-  const getFeatureColor = (value: number | undefined | null) => {
-    if (value === undefined || value === null) return 'bg-gray-300';
-    
-    if (value < 0.3) return 'bg-blue-500';
-    if (value < 0.6) return 'bg-green-500';
-    return 'bg-red-500';
-  };
 
   if (!currentTrack || !token) {
     return (
@@ -451,7 +353,7 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
   }
 
   // Create a track info object from the current track
-  const trackInfo: TrackInfo = {
+  const trackInfo = {
     id: currentTrack.id,
     name: currentTrack.name,
     artists: currentTrack.artists,
@@ -459,8 +361,6 @@ const NowPlaying: React.FC<NowPlayingProps> = ({ albumArtRef: externalAlbumArtRe
     duration_ms: currentTrack.duration_ms,
     albumName: currentTrack.album?.name || 'Unknown Album',
     albumImage: currentTrack.album?.images?.[0]?.url || 'https://via.placeholder.com/64',
-    // Handle the audioFeatures property safely with optional chaining
-    audioFeatures: (currentTrack as any).audioFeatures
   };
 
   return (

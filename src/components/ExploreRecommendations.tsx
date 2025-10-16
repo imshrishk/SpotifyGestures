@@ -41,6 +41,7 @@ interface AudioFeatureFilters {
 
 const ExploreRecommendations: React.FC = () => {
   const { token, currentTrack } = useSpotifyStore();
+  const [selectedGenres] = useState<string[]>([]);
   const [topArtists, setTopArtists] = useState<TopItem[]>([]);
   const [topTracks, setTopTracks] = useState<TopItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -59,6 +60,10 @@ const ExploreRecommendations: React.FC = () => {
     maxPopularity: 100
   });
   const [showFilters, setShowFilters] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchArtists, setSearchArtists] = useState<TopItem[]>([]);
+  const [searchTracks, setSearchTracks] = useState<TopItem[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const [currentSeed, setCurrentSeed] = useState<string | null>(null);
   
   // Load top tracks and artists when component mounts
@@ -108,15 +113,57 @@ const ExploreRecommendations: React.FC = () => {
     if (selectedItems.some(selected => selected.id === item.id)) {
       setSelectedItems(selectedItems.filter(selected => selected.id !== item.id));
     } else {
-      // Maximum 5 seed items (Spotify API limitation)
-      if (selectedItems.length < 5) {
-        setSelectedItems([...selectedItems, item]);
-      } else {
-        // Replace the oldest item
-        setSelectedItems([...selectedItems.slice(1), item]);
-      }
+      // Allow any number of seeds
+      setSelectedItems([...selectedItems, item]);
     }
   };
+
+  // Debounced search for artists and tracks
+  useEffect(() => {
+    if (!token) return;
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchArtists([]);
+      setSearchTracks([]);
+      return;
+    }
+    let cancelled = false;
+    setIsSearching(true);
+    const id = setTimeout(async () => {
+      try {
+        const res = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=artist,track&limit=8`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error(`Search failed: ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        const a: TopItem[] = (data?.artists?.items || []).map((artist: any) => ({
+          id: artist.id,
+          name: artist.name,
+          type: 'artist',
+          images: artist.images,
+        }));
+        const t: TopItem[] = (data?.tracks?.items || []).map((track: any) => ({
+          id: track.id,
+          name: track.name,
+          type: 'track',
+          album: track.album,
+          artists: track.artists,
+        }));
+        setSearchArtists(a);
+        setSearchTracks(t);
+      } catch (e) {
+        setSearchArtists([]);
+        setSearchTracks([]);
+      } finally {
+        if (!cancelled) setIsSearching(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [searchQuery, token]);
   
   const getRecommendationsForCurrentSeed = async () => {
     if (!currentSeed || !token) return;
@@ -125,19 +172,18 @@ const ExploreRecommendations: React.FC = () => {
       setIsLoading(true);
       setError(null);
       
-      const recommendationParams: any = {
-        limit: 10,
-        ...featureFilters
-      };
-      
-      // Add seed to params
+      // Determine seeds for unified helper
+      let seedTracks: string[] = [];
+      let seedArtists: string[] = [];
+      let seedGenres: string[] = [];
+
       if (currentSeed === 'current') {
         if (!currentTrack?.id) {
           setError('No track is currently playing');
           setIsLoading(false);
           return;
         }
-        recommendationParams.seed_tracks = [currentTrack.id];
+        seedTracks = [currentTrack.id];
       } else if (currentSeed === 'selected') {
         if (selectedItems.length === 0) {
           setError('Please select at least one item');
@@ -145,50 +191,30 @@ const ExploreRecommendations: React.FC = () => {
           return;
         }
         
-        const seedArtists = selectedItems
+        seedArtists = selectedItems
           .filter(item => item.type === 'artist')
           .map(item => item.id);
         
-        const seedTracks = selectedItems
+        seedTracks = selectedItems
           .filter(item => item.type === 'track')
           .map(item => item.id);
         
-        if (seedArtists.length > 0) {
-          recommendationParams.seed_artists = seedArtists.slice(0, 2); // Max 2 artists
-        }
-        
-        if (seedTracks.length > 0) {
-          recommendationParams.seed_tracks = seedTracks.slice(0, 2); // Max 2 tracks
-        }
+        // Also pass along any chosen genres from the UI selection panel
+        seedGenres = (Array.isArray((selectedGenres as unknown)) ? (selectedGenres as string[]) : []).slice(0, 5);
       }
       
       // Ensure we have at least one seed parameter
-      const hasSeeds = recommendationParams.seed_tracks?.length > 0 || recommendationParams.seed_artists?.length > 0;
+      const hasSeeds = seedTracks.length > 0 || seedArtists.length > 0 || seedGenres.length > 0;
       if (!hasSeeds) {
         setError('No valid seed items found');
         setIsLoading(false);
         return;
       }
       
-      console.log('Fetching recommendations with params:', recommendationParams);
-      
-      // Call Spotify API
-      const response = await fetch(`https://api.spotify.com/v1/recommendations?${new URLSearchParams(
-        Object.entries(recommendationParams)
-          .filter(([_, value]) => value !== undefined && value !== null && value !== '')
-          .map(([key, value]) => [key, Array.isArray(value) ? value.join(',') : String(value)])
-      )}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Spotify API returned ${response.status}: ${await response.text()}`);
-      }
-      
-      const data = await response.json();
-      
+      console.log('Fetching recommendations with unified helper and seeds:', { seedTracks, seedArtists, seedGenres });
+
+      const data = await getRecommendations(seedTracks, seedArtists, seedGenres);
+
       if (!data.tracks || data.tracks.length === 0) {
         setError('No recommendations found. Try adjusting your filters or selecting different seed items.');
         setRecommendations([]);
@@ -488,10 +514,61 @@ const ExploreRecommendations: React.FC = () => {
                 ? 'bg-green-500 text-white'
                 : 'bg-white/10 text-white hover:bg-white/20'
             }`}
-            disabled={selectedItems.length === 0}
           >
-            Selected Items ({selectedItems.length}/5)
+            Selected Items
           </button>
+        </div>
+
+        {/* Inline search to add seeds */}
+        <div className="mb-4">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search artists or tracks to add as seeds..."
+            className="w-full p-2 bg-gray-800/60 rounded-md text-sm text-white placeholder-gray-400"
+          />
+          {searchQuery && (
+            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs text-gray-400 mb-1">Artists {isSearching ? '· searching...' : ''}</div>
+                <div className="space-y-1 max-h-40 overflow-y-auto custom-scrollbar">
+                  {searchArtists.map(artist => (
+                    <div
+                      key={artist.id}
+                      className={`flex items-center p-2 rounded cursor-pointer ${selectedItems.some(s => s.id === artist.id) ? 'bg-green-500/30' : 'hover:bg-white/10'}`}
+                      onClick={() => toggleSelectedItem(artist)}
+                    >
+                      <img src={artist.images?.[0]?.url} alt={artist.name} className="w-8 h-8 rounded-full object-cover mr-2" />
+                      <div className="text-sm text-white truncate">{artist.name}</div>
+                    </div>
+                  ))}
+                  {!isSearching && searchArtists.length === 0 && (
+                    <div className="text-xs text-gray-500">No artists</div>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-400 mb-1">Tracks {isSearching ? '· searching...' : ''}</div>
+                <div className="space-y-1 max-h-40 overflow-y-auto custom-scrollbar">
+                  {searchTracks.map(track => (
+                    <div
+                      key={track.id}
+                      className={`flex items-center p-2 rounded cursor-pointer ${selectedItems.some(s => s.id === track.id) ? 'bg-green-500/30' : 'hover:bg-white/10'}`}
+                      onClick={() => toggleSelectedItem(track)}
+                    >
+                      <img src={track.album?.images?.[0]?.url} alt={track.name} className="w-8 h-8 rounded object-cover mr-2" />
+                      <div className="text-sm text-white truncate flex-1">{track.name}</div>
+                      <div className="text-xs text-gray-400 truncate ml-2">{(track.artists || []).map((a: any) => a.name).join(', ')}</div>
+                    </div>
+                  ))}
+                  {!isSearching && searchTracks.length === 0 && (
+                    <div className="text-xs text-gray-500">No tracks</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
         
         {/* Selected items */}

@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction, Router, RequestHandler } from 'express';
+import express, { Router, RequestHandler } from 'express';
 import axios from 'axios';
 import cheerio from 'cheerio';
 import NodeCache from 'node-cache';
@@ -76,7 +76,7 @@ const scrapeGeniusLyrics = async (url: string): Promise<LyricsResponse> => {
     }
 
     let lyrics = '';
-    let syncedLyrics: SyncedLyric[] = [];
+    const syncedLyrics: SyncedLyric[] = [];
 
     lyricsContainer.each((_, elem) => {
       const $elem = $(elem);
@@ -223,11 +223,12 @@ router.get('/lyrics/genius', checkRateLimit, getGeniusLyrics);
 router.get('/lyrics/alternative', checkRateLimit, getAlternativeLyrics);
 
 // NetEase lyrics endpoint
-router.get('/lyrics/netease', async (req: Request, res: Response) => {
+const neteaseHandler: RequestHandler = async (req, res) => {
   try {
-    const { artist, title } = req.query;
-    if (!artist || !title || typeof artist !== 'string' || typeof title !== 'string') {
-      return res.status(400).send('Artist and title are required');
+    const { artist, title } = req.query as { artist?: string; title?: string };
+    if (!artist || !title) {
+      res.status(400).send('Artist and title are required');
+      return;
     }
 
     // First search for the song
@@ -244,7 +245,8 @@ router.get('/lyrics/netease', async (req: Request, res: Response) => {
       );
 
       if (lyricsResponse.data?.lrc?.lyric) {
-        return res.json({ lrc: lyricsResponse.data.lrc.lyric });
+        res.json({ lrc: lyricsResponse.data.lrc.lyric });
+        return;
       }
     }
 
@@ -253,28 +255,32 @@ router.get('/lyrics/netease', async (req: Request, res: Response) => {
     console.error('Error fetching NetEase lyrics:', error);
     res.status(500).send('Failed to fetch lyrics');
   }
-});
+};
+
+router.get('/lyrics/netease', checkRateLimit, neteaseHandler);
 
 // Musixmatch lyrics endpoint
-router.get('/lyrics/musixmatch', async (req: Request, res: Response) => {
+const musixmatchHandler: RequestHandler = async (req, res) => {
   try {
-    const { artist, title } = req.query;
-    if (!artist || !title || typeof artist !== 'string' || typeof title !== 'string') {
-      return res.status(400).send('Artist and title are required');
+    const { artist, title } = req.query as { artist?: string; title?: string };
+    if (!artist || !title) {
+      res.status(400).send('Artist and title are required');
+      return;
     }
 
     // First search for the song
-    const searchResponse = await axios.get(
-      `https://api.musixmatch.com/ws/1.1/track.search?q_track=${encodeURIComponent(title)}&q_artist=${encodeURIComponent(artist)}&apikey=${process.env.MUSIXMATCH_API_KEY}&format=json`
-    );
+      const mmApiKey = (typeof import.meta !== 'undefined' && (import.meta as any).env && (import.meta as any).env.VITE_MUSIXMATCH_API_KEY) || (typeof process !== 'undefined' ? process.env.VITE_MUSIXMATCH_API_KEY : undefined);
+      const searchResponse = await axios.get(
+        `https://api.musixmatch.com/ws/1.1/track.search?q_track=${encodeURIComponent(title)}&q_artist=${encodeURIComponent(artist)}&apikey=${mmApiKey}&format=json`
+      );
 
     if (searchResponse.data?.message?.body?.track_list?.length > 0) {
       const trackId = searchResponse.data.message.body.track_list[0].track.track_id;
       
       // Get synced lyrics
-      const lyricsResponse = await axios.get(
-        `https://api.musixmatch.com/ws/1.1/track.subtitle.get?track_id=${trackId}&apikey=${process.env.MUSIXMATCH_API_KEY}&format=json&subtitle_format=lrc`
-      );
+        const lyricsResponse = await axios.get(
+          `https://api.musixmatch.com/ws/1.1/track.subtitle.get?track_id=${trackId}&apikey=${mmApiKey}&format=json&subtitle_format=lrc`
+        );
 
       if (lyricsResponse.data?.message?.body?.subtitle?.subtitle_body) {
         const lrcContent = lyricsResponse.data.message.body.subtitle.subtitle_body;
@@ -291,12 +297,13 @@ router.get('/lyrics/musixmatch', async (req: Request, res: Response) => {
             }
             return null;
           })
-          .filter((line): line is SyncedLyric => line !== null);
+          .filter((line: SyncedLyric | null): line is SyncedLyric => line !== null);
 
-        return res.json({
+        res.json({
           lyrics: syncedLyrics.map((l: SyncedLyric) => l.text).join('\n'),
           syncedLyrics
         });
+        return;
       }
     }
 
@@ -305,6 +312,8 @@ router.get('/lyrics/musixmatch', async (req: Request, res: Response) => {
     console.error('Error fetching Musixmatch lyrics:', error);
     res.status(500).send('Failed to fetch lyrics');
   }
-});
+};
+
+router.get('/lyrics/musixmatch', checkRateLimit, musixmatchHandler);
 
 export default router; 

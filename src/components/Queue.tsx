@@ -5,16 +5,12 @@ import {
   Music, 
   Shuffle, 
   Repeat, 
-  Play, 
   Plus, 
   Trash2, 
   X, 
   Search,
   Clock,
-  Volume2,
   SkipForward,
-  Heart,
-  MoreHorizontal,
   BarChart3
 } from 'lucide-react';
 import useSpotifyStore from '../stores/useSpotifyStore';
@@ -46,15 +42,16 @@ const Queue: React.FC = () => {
     const fetchRecentTracks = async () => {
       try {
         const response = await getRecentlyPlayed(20);
-        const formattedTracks: Track[] = response.items.map((item: { track: any }) => {
-          const track = item.track;
+        const formattedTracks: Track[] = response.items.map((item: unknown) => {
+          const track = (item as { track?: unknown })?.track as unknown;
+          const t = track as { id?: string; name?: string; artists?: unknown[]; album?: unknown; duration_ms?: number; uri?: string };
           return {
-            id: track.id,
-            name: track.name,
-            artists: track.artists,
-            album: track.album,
-            duration_ms: track.duration_ms,
-            uri: track.uri
+            id: t.id || 'unknown',
+            name: t.name || 'Unknown',
+            artists: (t.artists as { name: string }[]) || [{ name: 'Unknown' }],
+            album: (t.album as { name: string; images: { url: string }[] }) || { name: 'Unknown', images: [] },
+            duration_ms: t.duration_ms,
+            uri: t.uri || ''
           };
         });
         setRecentTracks(formattedTracks);
@@ -155,34 +152,36 @@ const Queue: React.FC = () => {
     }
   };
 
-  const performSearch = async (query: string) => {
-    if (!query.trim() || !token) {
-      setSearchResults([]);
-      return;
-    }
-
-    setIsSearching(true);
-    try {
-      const tracks = await searchTracks(query, 10);
-      const formattedTracks: Track[] = tracks.map((track: { id: string; name: string; artists: any[]; album: any; duration_ms?: number; uri: string }) => ({
-        id: track.id,
-        name: track.name,
-        artists: track.artists,
-        album: track.album,
-        duration_ms: track.duration_ms,
-        uri: track.uri
-      }));
-      setSearchResults(formattedTracks);
-    } catch (error) {
-      console.error('Error searching tracks:', error);
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
   useEffect(() => {
     const debounceTimer = setTimeout(() => {
-      performSearch(searchQuery);
+      (async () => {
+        const query = searchQuery;
+        if (!query.trim() || !token) {
+          setSearchResults([]);
+          return;
+        }
+
+        setIsSearching(true);
+        try {
+          const tracks = await searchTracks(query, 10);
+          const formattedTracks: Track[] = (tracks as unknown[]).map((trackUnknown) => {
+            const track = trackUnknown as { id?: string; name?: string; artists?: { name: string }[]; album?: unknown; duration_ms?: number; uri?: string };
+            return {
+              id: track.id || 'unknown',
+              name: track.name || 'Unknown',
+              artists: track.artists || [{ name: 'Unknown' }],
+              album: track.album || { name: 'Unknown', images: [] },
+              duration_ms: track.duration_ms,
+              uri: track.uri || ''
+            } as Track;
+          });
+          setSearchResults(formattedTracks);
+        } catch (error) {
+          console.error('Error searching tracks:', error);
+        } finally {
+          setIsSearching(false);
+        }
+      })();
     }, 300);
 
     return () => clearTimeout(debounceTimer);
@@ -357,7 +356,7 @@ const Queue: React.FC = () => {
 
         {/* Tracks List */}
         <div className="space-y-3 max-h-[600px] overflow-y-auto custom-scrollbar bg-gray-900/70 rounded-2xl p-2">
-          <AnimatePresence mode="wait">
+          <AnimatePresence>
             {displayTracks.length === 0 ? (
               <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}
@@ -538,7 +537,7 @@ const Queue: React.FC = () => {
               
               {/* Search Results */}
               <div className="max-h-96 overflow-y-auto custom-scrollbar">
-                <AnimatePresence mode="wait">
+                <AnimatePresence>
                   {isSearching ? (
                     <motion.div
                       initial={{ opacity: 0 }}
