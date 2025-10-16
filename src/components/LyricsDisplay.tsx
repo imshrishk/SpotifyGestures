@@ -10,7 +10,7 @@ interface SyncedLyric {
 }
 
 const LyricsDisplay: React.FC = () => {
-  const { currentTrack, isPlaying, progress_ms } = useSpotifyStore();
+  const { currentTrack, progress_ms } = useSpotifyStore();
   const [lyrics, setLyrics] = useState<string | null>(null);
   const [syncedLyrics, setSyncedLyrics] = useState<SyncedLyric[] | null>(null);
   const [activeLyricIndex, setActiveLyricIndex] = useState<number>(-1);
@@ -20,18 +20,18 @@ const LyricsDisplay: React.FC = () => {
   const autoScrollRef = useRef<boolean>(true);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const fetchLyrics = async () => {
+  const fetchLyrics = useCallback(async () => {
     if (!currentTrack) return;
-    
+
     setIsLoading(true);
     setError(null);
-    
+
     try {
       const result = await getLyrics(currentTrack.id);
       setLyrics(result.lyrics);
       setSyncedLyrics(result.syncedLyrics);
       setActiveLyricIndex(-1);
-      
+
       if (!result.lyrics && !result.syncedLyrics) {
         setError('No lyrics found for this track');
       }
@@ -41,11 +41,11 @@ const LyricsDisplay: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentTrack]);
 
   useEffect(() => {
     fetchLyrics();
-  }, [currentTrack]);
+  }, [currentTrack, fetchLyrics]);
 
   useEffect(() => {
     if (!syncedLyrics || progress_ms === null || !autoScrollRef.current) return;
@@ -61,11 +61,18 @@ const LyricsDisplay: React.FC = () => {
       if (lyricsContainerRef.current && autoScrollRef.current) {
         const activeElement = lyricsContainerRef.current.children[currentIndex] as HTMLElement;
         if (activeElement) {
-          activeElement.scrollIntoView({ 
-            behavior: 'smooth', 
-            block: 'center',
-            inline: 'nearest'
-          });
+          if ('scrollIntoView' in activeElement && typeof (activeElement as unknown as { scrollIntoView?: unknown }).scrollIntoView === 'function') {
+            try {
+              activeElement.scrollIntoView({
+                behavior: 'smooth',
+                block: 'center',
+                inline: 'nearest'
+              });
+            } catch {
+            }
+          } else if (lyricsContainerRef.current) {
+            lyricsContainerRef.current.scrollTop = Math.max(0, (activeElement as HTMLElement).offsetTop - (lyricsContainerRef.current.clientHeight / 2));
+          }
         }
       }
     }

@@ -11,29 +11,30 @@ interface Track {
   artists: { name: string }[];
 }
 
-const SongRecommendations: React.FC = () => {
+const SongRecommendations: React.FC<{ seedGenre?: string }> = ({ seedGenre }) => {
   const { currentTrack } = useSpotifyStore();
   const [recommendations, setRecommendations] = useState<Track[]>([]);
 
   const handleAddToQueue = async (uri: string) => {
     try {
       await addToQueue(uri);
-      alert('Added to queue!');
     } catch (error) {
       console.error('Error adding to queue:', error);
-      alert('Failed to add to queue.');
     }
   };
 
   useEffect(() => {
     const fetchRecommendations = async () => {
       if (currentTrack) {
-        const recs = await getRecommendations([currentTrack.id]);
+        const seedTracks = [currentTrack.id];
+        const seedArtists: string[] = [];
+        const seedGenres = seedGenre ? [seedGenre] : [];
+        const recs = await getRecommendations(seedTracks, seedArtists, seedGenres);
         setRecommendations(recs.tracks);
       }
     };
     fetchRecommendations();
-  }, [currentTrack]);
+  }, [currentTrack, seedGenre]);
 
   return (
     <div className="bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl p-6 w-full border border-white/10">

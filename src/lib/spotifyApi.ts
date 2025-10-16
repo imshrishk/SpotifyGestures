@@ -166,7 +166,7 @@ export class SpotifyApi {
       }
 
       const deviceData = await deviceResponse.json();
-      let activeDevice = deviceData.devices.find((device: any) => device.is_active);
+      const activeDevice = deviceData.devices.find((device: any) => device.is_active);
       let deviceIdToUse = activeDevice?.id;
 
       if (!activeDevice && deviceData.devices && deviceData.devices.length > 0) {

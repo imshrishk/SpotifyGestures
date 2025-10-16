@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import io, { Socket } from 'socket.io-client';
+import { setAccessToken } from '../lib/spotify';
 
 interface User {
   id: string;
@@ -37,14 +38,14 @@ interface AudioAnalysis {
   }>;
 }
 
-const SOCKET_URL = 'http://localhost:3001';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ?? null;
 
 interface SpotifyState {
   token: string | null;
   user: User | null;
   currentTrack: SpotifyApi.TrackObjectFull | null;
   currentPlaylist: SpotifyApi.PlaylistObjectSimplified | null;
-  queue: any[];
+  queue: SpotifyApi.TrackObjectFull[];
   isPlaying: boolean;
   volume: number;
   error: string | null;
@@ -52,10 +53,12 @@ interface SpotifyState {
   audioFeatures: AudioFeatures | null;
   audioAnalysis: AudioAnalysis | null;
   socket: Socket | null;
-  setToken: (token: string) => void;
+  refreshToken: string | null;
+  tokenExpiry: number | null;
+  setToken: (token: string, expiresIn?: number, refreshToken?: string) => void;
   setUser: (user: User) => void;
   setCurrentTrack: (track: SpotifyApi.TrackObjectFull | null, playlist?: SpotifyApi.PlaylistObjectSimplified | null) => void;
-  setQueue: (queue: any[]) => void;
+  setQueue: (queue: SpotifyApi.TrackObjectFull[]) => void;
   removeTrackFromQueue: (trackId: string) => void;
   setIsPlaying: (isPlaying: boolean) => void;
   setVolume: (volume: number) => void;
@@ -66,6 +69,7 @@ interface SpotifyState {
   initializeSocket: () => void;
   clearSession: () => void;
   isAuthenticated: () => boolean;
+  rehydrated: boolean;
 }
 
 export const useSpotifyStore = create<SpotifyState>()(
@@ -78,20 +82,39 @@ export const useSpotifyStore = create<SpotifyState>()(
 
       let initialToken: string | null = null;
       let initialUser: User | null = null;
+      let initialTokenExpiry: number | null = null;
+      let initialRefreshToken: string | null = null;
 
-      if (storedToken && storedTokenExpiration && new Date().getTime() < parseInt(storedTokenExpiration)) {
-        initialToken = storedToken;
-        if (storedUser) {
-          initialUser = JSON.parse(storedUser);
+      if (storedToken && storedTokenExpiration) {
+        const currentTime = new Date().getTime();
+        const expiryTime = parseInt(storedTokenExpiration);
+        const storedRefreshToken = localStorage.getItem('spotify_refresh_token');
+        
+        if (currentTime < expiryTime || storedRefreshToken) {
+          initialToken = storedToken;
+          initialTokenExpiry = expiryTime;
+          initialRefreshToken = storedRefreshToken;
+          if (storedUser) {
+            initialUser = JSON.parse(storedUser);
+          }
+          try {
+            const expiresInSec = initialTokenExpiry
+              ? Math.max(0, Math.floor((initialTokenExpiry - Date.now()) / 1000))
+              : undefined;
+            setAccessToken(storedToken, expiresInSec, storedRefreshToken || undefined);
+          } catch (e) {
+            console.debug('[useSpotifyStore] failed to restore spotify access token on init', e);
+          }
+        } else {
+          // Clear expired tokens but keep refresh token if it exists
+          localStorage.removeItem('spotify_token');
+          localStorage.removeItem('spotify_token_expires_at');
+          localStorage.removeItem('spotify_user');
         }
-      } else {
-        // Clear any expired or invalid tokens
-        localStorage.removeItem('spotify_token');
-        localStorage.removeItem('spotify_token_expiration');
-        localStorage.removeItem('spotify_user');
       }
 
       return {
+        rehydrated: false,
         token: initialToken,
         user: initialUser,
         currentTrack: null,
@@ -104,12 +127,22 @@ export const useSpotifyStore = create<SpotifyState>()(
         audioFeatures: null,
         audioAnalysis: null,
         socket: null,
-        setToken: (token) => {
-          // Also update localStorage to keep it in sync
+        refreshToken: initialRefreshToken,
+        tokenExpiry: initialTokenExpiry,
+        setToken: (token, expiresIn = 3600, refreshToken?: string) => {
+          console.debug('[useSpotifyStore] setToken called, expiresIn:', expiresIn, 'hasRefresh:', !!refreshToken);
+          // Calculate token expiry time
+          const expiryTime = new Date().getTime() + (expiresIn * 1000);
+          // Store token and expiry
           localStorage.setItem('spotify_token', token);
-          set({ token, error: null });
+          localStorage.setItem('spotify_token_expires_at', expiryTime.toString());
+          if (refreshToken) {
+            localStorage.setItem('spotify_refresh_token', refreshToken);
+          }
+          set({ token, tokenExpiry: expiryTime, refreshToken: refreshToken || null, error: null });
         },
         setUser: (user) => {
+          console.debug('[useSpotifyStore] setUser called for user:', user?.id || 'unknown');
           // Also update localStorage to keep it in sync
           localStorage.setItem('spotify_user', JSON.stringify(user));
           set({ user });
@@ -153,28 +186,31 @@ export const useSpotifyStore = create<SpotifyState>()(
         setAudioFeatures: (audioFeatures) => set({ audioFeatures }),
         setAudioAnalysis: (audioAnalysis) => set({ audioAnalysis }),
         initializeSocket: () => {
+          // Only try to connect if SOCKET_URL is set and not empty
+          if (!SOCKET_URL) {
+            console.log('Socket URL not set, skipping socket connection (this is normal).');
+            return;
+          }
           try {
             const socket = io(SOCKET_URL, {
               timeout: 5000,
               forceNew: true,
+              reconnection: false, // Disable auto-reconnection to reduce noise
             });
-            
+            console.debug('[useSpotifyStore] initializing socket to', SOCKET_URL);
             socket.on('connect', () => {
               console.log('Socket connected successfully');
             });
-            
             socket.on('connect_error', (error) => {
-              console.warn('Socket connection failed:', error.message);
-              // Don't set the socket if connection fails
+              console.log('Socket connection failed (this is normal if socket server is not running):', error.message);
+              // Don't set socket to null, just log the error
             });
-            
             socket.on('player-state-update', (state) => {
               set(state);
             });
-            
             set({ socket });
           } catch (error) {
-            console.warn('Failed to initialize socket:', error);
+            console.log('Failed to initialize socket (this is normal if socket server is not running):', error);
             // Continue without socket connection
           }
         },
@@ -184,11 +220,17 @@ export const useSpotifyStore = create<SpotifyState>()(
           } catch (error) {
             console.warn('Error disconnecting socket:', error);
           }
-          // Clear all localStorage items
-          localStorage.removeItem('spotify-storage');
-          localStorage.removeItem('spotify_token');
-          localStorage.removeItem('spotify_token_expires_at');
-          localStorage.removeItem('spotify_user');
+          // Clear only Spotify-related localStorage items, preserve PKCE verifier
+          try {
+            localStorage.removeItem('spotify-storage');
+            localStorage.removeItem('spotify_token');
+            localStorage.removeItem('spotify_token_expires_at');
+            localStorage.removeItem('spotify_refresh_token');
+            localStorage.removeItem('spotify_user');
+          } catch {
+            // Fallback to removing known keys if removeItem is not available
+            console.warn('Failed to clear Spotify localStorage items');
+          }
           set({
             token: null,
             user: null,
@@ -200,16 +242,30 @@ export const useSpotifyStore = create<SpotifyState>()(
             audioFeatures: null,
             audioAnalysis: null,
             socket: null,
+            refreshToken: null,
+            tokenExpiry: null,
           });
         },
         isAuthenticated: () => {
+          // Prefer in-memory store values (rehydrated by zustand persist) to avoid
+          // reading localStorage repeatedly. Fall back to localStorage for legacy
+          // cases where the store hasn't been rehydrated yet.
+          const state = get();
+          if (state.token && state.user && state.tokenExpiry) {
+            return Date.now() < state.tokenExpiry;
+          }
+
           const storedToken = localStorage.getItem('spotify_token');
           const storedTokenExpiration = localStorage.getItem('spotify_token_expires_at');
+          const storedRefreshToken = localStorage.getItem('spotify_refresh_token');
           const storedUser = localStorage.getItem('spotify_user');
-          
-          return !!(storedToken && storedTokenExpiration && 
-                   new Date().getTime() < parseInt(storedTokenExpiration) && 
-                   storedUser);
+
+          return !!(
+            (storedToken && storedTokenExpiration && 
+             Date.now() < parseInt(storedTokenExpiration) && 
+             storedUser) ||
+            (storedRefreshToken && storedUser)
+          );
         },
       };
     },
@@ -220,6 +276,16 @@ export const useSpotifyStore = create<SpotifyState>()(
         Object.fromEntries(
           Object.entries(state).filter(([key]) => !['socket'].includes(key))
         ),
+      // Called by zustand-persist after rehydration; mark store as rehydrated
+      onRehydrateStorage: () => (state) => {
+        try {
+          if (state) {
+            (state as unknown as { rehydrated?: boolean }).rehydrated = true;
+          }
+        } catch (e) {
+          console.debug('[useSpotifyStore] onRehydrateStorage failed to mark rehydrated', e);
+        }
+      }
     }
   )
 );

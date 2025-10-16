@@ -2,18 +2,20 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import NowPlaying from '../components/NowPlaying';
 import Queue from '../components/Queue';
+import SongRecommendations from '../components/SongRecommendations';
 import GestureControl from '../components/GestureControl';
 import UserProfile from '../components/UserProfile';
 import EnhancedLyricsDisplay from '../components/EnhancedLyricsDisplay';
 import TrackGenres from '../components/TrackGenres';
 import ExploreRecommendations from '../components/ExploreRecommendations';
+import MonitoringDashboard from '../components/MonitoringDashboard';
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { getCurrentTrack, getQueue, playPause, nextTrack, previousTrack, setVolume, getAudioAnalysis } from '../lib/spotify';
 import { AlertCircle, Loader2, Music2, Keyboard, Sparkles } from 'lucide-react';
 import { extractDominantColor } from '../lib/colorExtractor';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const Player: React.FC = () => {
+const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) => {
   const navigate = useNavigate();
   const {
     error, 
@@ -27,7 +29,9 @@ const Player: React.FC = () => {
     setVolume: updateVolume,
     setAudioFeatures,
     setAudioAnalysis,
-    isAuthenticated
+    isAuthenticated,
+    user,
+    rehydrated
   } = useSpotifyStore();
   const [isLoading, setIsLoading] = useState(true);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
@@ -35,12 +39,15 @@ const Player: React.FC = () => {
   const [backgroundColor, setBackgroundColor] = useState<string>('#121212');
   const [showLyrics, setShowLyrics] = useState(true);
   const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
-  const [_, setSelectedGenre] = useState<string>('');
+  const selectedGenreRef = useRef<string>('');
   const [activeTab, setActiveTab] = useState<'standard' | 'explore'>('standard');
   const albumArtRef = useRef<HTMLImageElement>(null);
   const MAX_RETRIES = 3;
   const [volumeMode, setVolumeMode] = useState(false);
   const [showVolumeModeIndicator, setShowVolumeModeIndicator] = useState(false);
+  const REFRESH_INTERVAL_MS = 15000;
+  const REFRESH_BACKOFF_ON_RATE_LIMIT_MS = 30000;
+  const consecutiveFailuresRef = useRef(0);
 
   // Handle keyboard shortcuts
   const handleKeyPress = useCallback((event: KeyboardEvent) => {
@@ -62,21 +69,25 @@ const Player: React.FC = () => {
         break;
       case 'Space': // Play/Pause
         event.preventDefault();
-        playPause(!isPlaying);
-        setIsPlaying(!isPlaying);
+        if (previewMode) {
+          setIsPlaying(!isPlaying);
+        } else {
+          playPause(!isPlaying);
+          setIsPlaying(!isPlaying);
+        }
         break;
       case 'ArrowRight': // Next track
-        nextTrack();
+        if (!previewMode) nextTrack();
         break;
       case 'ArrowLeft': // Previous track
-        previousTrack();
+        if (!previewMode) previousTrack();
         break;
       case 'ArrowUp': // Volume up (only in volume mode)
         if (volumeMode) {
           event.preventDefault();
           const newVolumeUp = Math.min(volume + 5, 100);
           setVolume(newVolumeUp);
-          updateVolume(newVolumeUp);
+          if (!previewMode) updateVolume(newVolumeUp);
         }
         break;
       case 'ArrowDown': // Volume down (only in volume mode)
@@ -84,7 +95,7 @@ const Player: React.FC = () => {
           event.preventDefault();
           const newVolumeDown = Math.max(volume - 5, 0);
           setVolume(newVolumeDown);
-          updateVolume(newVolumeDown);
+          if (!previewMode) updateVolume(newVolumeDown);
         }
         break;
       case 'KeyL': // Toggle lyrics
@@ -94,7 +105,7 @@ const Player: React.FC = () => {
         setShowKeyboardShortcuts(!showKeyboardShortcuts);
         break;
     }
-  }, [isPlaying, setIsPlaying, volume, updateVolume, showLyrics, showKeyboardShortcuts, volumeMode]);
+  }, [isPlaying, setIsPlaying, volume, updateVolume, showLyrics, showKeyboardShortcuts, volumeMode, previewMode]);
 
   // Add keyboard event listeners
   useEffect(() => {
@@ -103,64 +114,118 @@ const Player: React.FC = () => {
   }, [handleKeyPress]);
 
   useEffect(() => {
-    // Only fetch data if user is authenticated
-    if (!isAuthenticated()) {
+    console.debug('[Player] mount: rehydrated=', rehydrated, 'isAuthenticated=', isAuthenticated(), 'previewMode=', previewMode);
+
+    // If the store hasn't rehydrated yet, delay auth checks to avoid
+    // transient logout/flicker on page refresh. Allow preview mode to
+    // continue without waiting.
+    if (!rehydrated && !previewMode) {
+      console.debug('[Player] waiting for store rehydration before checking auth');
+      return;
+    }
+
+    if (!isAuthenticated() && !previewMode) {
+      console.debug('[Player] not authenticated; skipping data fetch and showing login');
       setIsLoading(false);
       setIsInitialLoad(false);
-      setError(null); // Clear any previous errors
+      setError(null);
       return;
     }
 
     const updatePlayerState = async () => {
       try {
-        // Only set loading state during initial load
-        if (isInitialLoad) {
-          setIsLoading(true);
+        if (isInitialLoad) setIsLoading(true);
+
+        // Fetch current playback and queue sequentially to reduce burst load
+        let trackResponse = null;
+        let queueResponse = null;
+        try {
+          trackResponse = await getCurrentTrack(user?.id);
+        } catch (err) {
+          // If Spotify rate-limited us, back off longer before retrying
+          const msg = err instanceof Error ? err.message : String(err);
+          const maybeErr = err as unknown;
+          if (/429|Too Many Requests|Rate limited/i.test(msg) || (typeof maybeErr === 'object' && maybeErr !== null && 'status' in (maybeErr as Record<string, unknown>) && typeof (maybeErr as Record<string, unknown>).status === 'number' && (maybeErr as Record<string, number>).status === 429)) {
+            console.warn('[Player] rate limited when fetching current track, backing off for', REFRESH_BACKOFF_ON_RATE_LIMIT_MS, 'ms');
+            setIsLoading(false);
+            setIsInitialLoad(false);
+            setTimeout(updatePlayerState, REFRESH_BACKOFF_ON_RATE_LIMIT_MS);
+            return;
+          }
+          throw err;
         }
-        
-        // We don't need to explicitly check token validity here
-        // as our API functions will handle that automatically
-        const [trackResponse, queueResponse] = await Promise.all([
-          getCurrentTrack(),
-          getQueue(),
-        ]);
+
+        try {
+          queueResponse = await getQueue(user?.id);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const maybeErr2 = err as unknown;
+          if (/429|Too Many Requests|Rate limited|Circuit breaker/i.test(msg) || (typeof maybeErr2 === 'object' && maybeErr2 !== null && 'status' in (maybeErr2 as Record<string, unknown>) && typeof (maybeErr2 as Record<string, unknown>).status === 'number' && (maybeErr2 as Record<string, number>).status === 429)) {
+            console.warn('[Player] rate limited when fetching queue, backing off for', REFRESH_BACKOFF_ON_RATE_LIMIT_MS, 'ms');
+            setIsLoading(false);
+            setIsInitialLoad(false);
+            setTimeout(updatePlayerState, REFRESH_BACKOFF_ON_RATE_LIMIT_MS);
+            return;
+          }
+          // For other queue errors, just log and continue without queue data
+          console.warn('[Player] Failed to fetch queue, continuing without queue data:', msg);
+          queueResponse = { queue: [], currently_playing: null };
+        }
 
         if (trackResponse?.item) {
           setCurrentTrack(trackResponse.item);
           setIsPlaying(trackResponse.is_playing);
           setError(null);
         } else {
-          // No track is playing, but this is not an error
           setCurrentTrack(null);
           setIsPlaying(false);
           setError(null);
         }
 
-        if (queueResponse?.queue) {
-          setQueue(queueResponse.queue);
-        } else {
-          setQueue([]);
-        }
+        if (queueResponse?.queue) setQueue(queueResponse.queue);
+        else setQueue([]);
 
-        setIsLoading(false);
-        setIsInitialLoad(false);
-        setRetryCount(0);
+  setIsLoading(false);
+  setIsInitialLoad(false);
+  setRetryCount(0);
+  consecutiveFailuresRef.current = 0;
+  setError(null);
       } catch (error) {
         console.error('Error updating player state:', error);
-        if (error instanceof Error) {
-          // If we get "Token expired" error, our token refresh logic will handle it
-          if (error.message === 'Token expired') {
-            // Don't show error to user, just wait for redirect
-            return;
-          }
-          setError(error.message);
-        } else {
-          setError('Failed to update player state');
+        if (error instanceof Error && error.message === 'Token expired') return;
+
+        const msg = error instanceof Error ? error.message : String(error);
+        const maybeError = error as unknown;
+        if (/429|Too Many Requests|Rate limited|Circuit breaker/i.test(msg) || (typeof maybeError === 'object' && maybeError !== null && 'status' in (maybeError as Record<string, unknown>) && typeof (maybeError as Record<string, unknown>).status === 'number' && (maybeError as Record<string, number>).status === 429)) {
+          console.warn('[Player] detected rate limit error, backing off for', REFRESH_BACKOFF_ON_RATE_LIMIT_MS, 'ms');
+          setIsLoading(false);
+          setIsInitialLoad(false);
+          setTimeout(updatePlayerState, REFRESH_BACKOFF_ON_RATE_LIMIT_MS);
+          return;
         }
-        
+
+        // For other errors, show a non-blocking warning and continue
+        console.warn('[Player] Non-critical error, continuing with limited functionality:', msg);
+        setIsLoading(false);
+        setIsInitialLoad(false);
+        setError(`Limited functionality: ${msg}`);
+
+        // Track transient failures without triggering re-renders
+        try {
+          const next = consecutiveFailuresRef.current + 1;
+          consecutiveFailuresRef.current = next;
+          if (next >= 3) {
+            if (error instanceof Error) setError(error.message);
+            else setError('Failed to update player state');
+          } else {
+            console.debug('Transient fetch error, keeping last known state', error);
+          }
+        } catch (e) {
+          console.debug('Failed to update consecutiveFailuresRef', e);
+        }
+
         if (retryCount < MAX_RETRIES) {
           setRetryCount(prev => prev + 1);
-          // Exponential backoff for retries
           setTimeout(updatePlayerState, Math.pow(2, retryCount) * 1000);
         } else {
           setIsLoading(false);
@@ -169,10 +234,31 @@ const Player: React.FC = () => {
       }
     };
 
-    updatePlayerState();
-    const interval = setInterval(updatePlayerState, 5000);
-    return () => clearInterval(interval);
-  }, [isAuthenticated, navigate, setCurrentTrack, setQueue, setError, setIsPlaying, retryCount, isInitialLoad]);
+    if (!previewMode) {
+      updatePlayerState();
+      const interval = setInterval(updatePlayerState, REFRESH_INTERVAL_MS);
+      return () => clearInterval(interval);
+    }
+
+    if (previewMode) {
+      setIsLoading(false);
+      setIsInitialLoad(false);
+      setError(null);
+      if (!currentTrack) {
+        try {
+          setCurrentTrack({
+            id: 'preview-track',
+            name: 'Preview Track',
+            artists: [{ name: 'Demo Artist' }],
+            album: { images: [{ url: '' }] }
+          } as unknown as SpotifyApi.TrackObjectFull);
+          setIsPlaying(true);
+        } catch (e) {
+          console.debug('preview set track failed', e);
+        }
+      }
+    }
+  }, [isAuthenticated, navigate, setCurrentTrack, setQueue, setError, setIsPlaying, retryCount, isInitialLoad, previewMode, currentTrack, rehydrated]);
 
   // Extract colors from album art when it changes
   useEffect(() => {
@@ -433,37 +519,37 @@ const Player: React.FC = () => {
         <div className="flex flex-col lg:flex-row gap-6">
           <div className="flex-1 flex flex-col h-full">
             <NowPlaying albumArtRef={albumArtRef} />
-            <TrackGenres onGenreClick={(genre) => setSelectedGenre(genre)} />
+            <TrackGenres onGenreClick={(genre) => { selectedGenreRef.current = genre; }} />
             {/* Recommendations Tabs */}
-            <div className="mb-2">
-              <div className="flex space-x-2">
+            <div className="mb-3 flex items-center gap-2">
+              <div className="flex bg-white/10 rounded-lg p-1">
                 <button
                   onClick={() => setActiveTab('standard')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center ${
+                  className={`px-4 py-2 rounded-md text-sm font-medium flex items-center ${
                     activeTab === 'standard'
                       ? 'bg-green-500 text-white'
-                      : 'bg-white/10 text-white hover:bg-white/20'
+                      : 'text-white hover:bg-white/20'
                   }`}
                 >
                   <Music2 className="w-4 h-4 mr-2" />
-                  Quick Recommendations
+                  Queue
                 </button>
                 <button
                   onClick={() => setActiveTab('explore')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center ${
+                  className={`px-4 py-2 rounded-md text-sm font-medium flex items-center ${
                     activeTab === 'explore'
                       ? 'bg-green-500 text-white'
-                      : 'bg-white/10 text-white hover:bg-white/20'
+                      : 'text-white hover:bg-white/20'
                   }`}
                 >
                   <Sparkles className="w-4 h-4 mr-2" />
-                  Explore Deep
+                  Recommendations
                 </button>
               </div>
             </div>
             {/* Tab Content */}
             <div className="flex-1 min-h-0 flex flex-col">
-              <AnimatePresence mode="wait">
+              <AnimatePresence>
                 {activeTab === 'standard' ? (
                   <motion.div
                     key="standard"
@@ -474,6 +560,9 @@ const Player: React.FC = () => {
                     className="flex-1 flex flex-col"
                   >
                     <Queue />
+                    <div className="mt-4">
+                      
+                    </div>
                   </motion.div>
                 ) : (
                   <motion.div
@@ -484,6 +573,9 @@ const Player: React.FC = () => {
                     transition={{ duration: 0.2 }}
                   >
                     <ExploreRecommendations />
+                    <div className="mt-4">
+                      <SongRecommendations seedGenre={selectedGenreRef.current || undefined} />
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -493,7 +585,7 @@ const Player: React.FC = () => {
             </div>
           </div>
 
-          <AnimatePresence mode="wait">
+          <AnimatePresence>
             {showLyrics && (
               <motion.div 
                 className="w-full lg:w-[400px]"
@@ -508,6 +600,9 @@ const Player: React.FC = () => {
           </AnimatePresence>
         </div>
       </div>
+      
+      {/* System Monitoring Dashboard */}
+      <MonitoringDashboard />
     </motion.div>
   );
 };

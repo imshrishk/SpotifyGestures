@@ -3,7 +3,7 @@ import useSpotifyStore from '../stores/useSpotifyStore';
 import { getLyrics } from '../lib/spotify';
 import { motion, AnimatePresence } from 'framer-motion';
 import { extractDominantColor } from '../lib/colorExtractor';
-import { X, Maximize2, Minimize2, Music } from 'lucide-react';
+import { Maximize2, Minimize2, Music } from 'lucide-react';
 
 interface SyncedLyric {
   time: number;
@@ -11,19 +11,19 @@ interface SyncedLyric {
 }
 
 const EnhancedLyricsDisplay: React.FC = () => {
-  const { currentTrack, isPlaying, progress_ms } = useSpotifyStore();
+  const { currentTrack, progress_ms } = useSpotifyStore();
   const [lyrics, setLyrics] = useState<string | null>(null);
   const [syncedLyrics, setSyncedLyrics] = useState<SyncedLyric[] | null>(null);
   const [activeLyricIndex, setActiveLyricIndex] = useState<number>(-1);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [backgroundColor, setBackgroundColor] = useState<string>('#121212');
-  const [textColor, setTextColor] = useState<string>('#ffffff');
+  const [, setTextColor] = useState<string>('#ffffff');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [nextLyricIndex, setNextLyricIndex] = useState<number>(-1);
   const [lyricsLoaded, setLyricsLoaded] = useState<boolean>(false);
   const [lyricSource, setLyricSource] = useState<string>('Spotify');
   const [isExpanded, setIsExpanded] = useState<boolean>(true);
-  
+
   const lyricsContainerRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef<boolean>(true);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);

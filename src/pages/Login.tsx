@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Hand, Palette, Star } from 'lucide-react';
-import { SPOTIFY_AUTH_URL } from '../lib/spotify';
+import { useNavigate } from 'react-router-dom';
+import { authCreds, generateCodeVerifier, generateCodeChallenge } from '../lib/authCreds';
 import useSpotifyStore from '../stores/useSpotifyStore';
 
 const Login: React.FC = () => {
@@ -12,24 +12,34 @@ const Login: React.FC = () => {
 
   useEffect(() => {
     // Check if the user is already authenticated and redirect if so
-    // This prevents clearing session on every visit to login page
     const storedToken = localStorage.getItem('spotify_token');
     const storedTokenExpiresAt = localStorage.getItem('spotify_token_expires_at');
     const storedUser = localStorage.getItem('spotify_user');
-
+    console.debug('[Login] mount: storedToken:', !!storedToken, 'storedUser:', !!storedUser);
     if (storedToken && storedTokenExpiresAt && new Date().getTime() < parseInt(storedTokenExpiresAt) && storedUser) {
-      // If authenticated, redirect to home or player page
-      navigate('/'); // Assuming '/' is the main authenticated route
+      navigate('/');
     } else {
-      // Only clear session if no valid token is found, ensuring a clean slate for new login
       clearSession();
     }
-  }, [clearSession]);
+  }, [clearSession, navigate]);
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     setIsLoading(true);
-    const authUrlWithDialog = `${SPOTIFY_AUTH_URL}&show_dialog=true`;
-    window.location.href = authUrlWithDialog;
+    console.debug('[Login] handleLogin: starting PKCE generation');
+    const codeVerifier = generateCodeVerifier();
+    localStorage.setItem('pkce_code_verifier', codeVerifier);
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    const params = new URLSearchParams({
+      client_id: authCreds.client_id,
+      response_type: 'code',
+      redirect_uri: authCreds.redirect_uri,
+      code_challenge_method: 'S256',
+      code_challenge: codeChallenge,
+      state: authCreds.state,
+      scope: authCreds.scope,
+      show_dialog: 'true',
+    });
+    window.location.href = `${authCreds.auth_endpoint}?${params.toString()}`;
   };
 
   return (
@@ -44,10 +54,7 @@ const Login: React.FC = () => {
         <p className="text-lg md:text-xl text-gray-300 mb-8">
           Control Your Music with a Wave of Your Hand.
         </p>
-        <motion.div
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-        >
+        <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
           <button
             onClick={handleLogin}
             disabled={isLoading}
@@ -57,7 +64,6 @@ const Login: React.FC = () => {
           </button>
         </motion.div>
       </motion.div>
-
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -77,7 +83,6 @@ const Login: React.FC = () => {
           <span>AI Recommendations</span>
         </div>
       </motion.div>
-
       {/* Animated background */}
       <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0">
         {[...Array(20)].map((_, i) => (

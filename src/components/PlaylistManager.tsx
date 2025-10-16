@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Plus, Music, Loader2 } from 'lucide-react';
-import { getUserPlaylists} from '../lib/spotify';
+import { getUserPlaylists, addTrackToPlaylist } from '../lib/spotify';
 
 interface PlaylistManagerProps {
   currentTrack: SpotifyApi.TrackObjectFull;
   onClose: () => void;
 }
 
-const PlaylistManager: React.FC<PlaylistManagerProps> = ({ onClose }) => {
+const PlaylistManager: React.FC<PlaylistManagerProps> = ({ currentTrack, onClose }) => {
   const [playlists, setPlaylists] = useState<SpotifyApi.PlaylistObjectSimplified[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,29 +32,38 @@ const PlaylistManager: React.FC<PlaylistManagerProps> = ({ onClose }) => {
   }, []);
 
   const handleAddToPlaylist = async (playlistId: string, playlistName: string) => {
+    if (!currentTrack || !currentTrack.id) {
+      setError('No current track to add');
+      return;
+    }
     try {
       setAddingToPlaylist(playlistId);
-      setError(null); // Clear any previous errors
-      setSuccess(null); // Clear any previous success messages
-      
-      // If we reach here, the addition was successful
+      setError(null);
+      setSuccess(null);
+
+  const trackUri = `spotify:track:${currentTrack.id}`;
+  await addTrackToPlaylist(playlistId, trackUri);
+
       setSuccess(`Added to ${playlistName}`);
-      setTimeout(() => {
-        onClose();
-      }, 1500);
-    } catch (err: any) {
+      setTimeout(() => onClose(), 1500);
+    } catch (err: unknown) {
       console.error('Error adding track to playlist:', err);
-      
-      // Check if this might actually be a false error
-      const errorMessage = err?.message?.toLowerCase() || '';
+      const hasMessage = (v: unknown): v is { message?: unknown } => !!v && typeof v === 'object' && 'message' in v;
+      const extractMessage = (e: unknown): string => {
+        if (!e || typeof e !== 'object') return '';
+        if (hasMessage(e) && typeof e.message === 'string') return e.message;
+        try {
+          return JSON.stringify(e as object);
+        } catch {
+          return String(e);
+        }
+      };
+      const errorMessage = extractMessage(err).toLowerCase();
       if (errorMessage.includes('snapshot_id') || errorMessage.includes('playlist')) {
-        // This is likely a successful operation that was misinterpreted as an error
         setSuccess(`Added to ${playlistName}`);
-        setTimeout(() => {
-          onClose();
-        }, 1500);
+        setTimeout(() => onClose(), 1500);
       } else {
-        setError(err?.message || 'Failed to add track to playlist');
+        setError(extractMessage(err) || 'Failed to add track to playlist');
       }
     } finally {
       setAddingToPlaylist(null);

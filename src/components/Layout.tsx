@@ -6,7 +6,7 @@ import {
   ListMusic,
   History,
   Lightbulb,
-  Settings,
+  
   LogOut,
   User,
   Mic,
@@ -41,9 +41,72 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { clearSession, user, token } = useSpotifyStore();
   const { isListening, setIsListening } = useVoiceCommands();
 
-  // Redirect to login if not authenticated
-  if (!token && location.pathname !== '/login') {
+  const [checkingAuth, setCheckingAuth] = React.useState(true);
+  React.useEffect(() => {
+    console.debug('[Layout] mount/update: token:', token, 'user:', user ? user.id : null);
+  }, [token, user]);
+
+  // Wait briefly for persisted zustand rehydration to complete if there is
+  // evidence in localStorage that a session exists. This avoids an immediate
+  // redirect back to /login when the app reloads from the OAuth callback.
+  React.useEffect(() => {
+    let mounted = true;
+
+    const persisted = !!(localStorage.getItem('spotify-storage') || localStorage.getItem('spotify_token'));
+    if (!persisted) {
+      // No persisted auth at all — allow normal redirect logic to run
+      console.debug('[Layout] no persisted session found');
+      if (mounted) setCheckingAuth(false);
+      return () => { mounted = false; };
+    }
+
+    // If we already have a token in the store, we're done
+    if (token) {
+      console.debug('[Layout] token already in store, skipping wait');
+      if (mounted) setCheckingAuth(false);
+      return () => { mounted = false; };
+    }
+
+  // Poll for a short time for the store to be rehydrated (max 2000ms)
+    const start = Date.now();
+    const interval = setInterval(() => {
+      const nowToken = useSpotifyStore.getState().token;
+      if (!mounted) return;
+        console.debug('[Layout] polling for rehydration: nowToken=', nowToken);
+      if (nowToken) {
+        setCheckingAuth(false);
+        clearInterval(interval);
+        return;
+      }
+      if (Date.now() - start > 2000) {
+        // Timeout — stop waiting
+        setCheckingAuth(false);
+        clearInterval(interval);
+      }
+    }, 80);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, [token]);
+
+  // Redirect to login if not authenticated and we've finished waiting for
+  // rehydration. While checkingAuth is true, show a lightweight loader so
+  // the app doesn't bounce the user to /login prematurely.
+  if (!token && !checkingAuth && location.pathname !== '/login') {
     return <Navigate to="/login" replace />;
+  }
+
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-primary text-white">
+        <div className="animate-pulse text-center">
+          <div className="h-8 w-8 rounded-full bg-green-500 mx-auto mb-4"></div>
+          <div>Restoring session…</div>
+        </div>
+      </div>
+    );
   }
 
   const navItems = [

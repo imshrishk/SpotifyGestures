@@ -1,10 +1,104 @@
 import SpotifyWebApi from 'spotify-web-api-js';
 import { authCreds } from './authCreds';
 import { SpotifyApi } from './spotifyApi';
+import { smartRequest, getConnectionPoolStats } from './connectionPool';
+import * as Cache from './cache';
+import { checkRateLimit, getRateLimitStats } from './rateLimiter';
 
-const spotify: any = new SpotifyWebApi();
+const spotify = new SpotifyWebApi();
 const clientId = authCreds.client_id;
 const redirectUri = authCreds.redirect_uri;
+export interface PlaybackState {
+  is_playing: boolean;
+  item: SpotifyApi.TrackObjectFull;
+  device: {
+    volume_percent?: number;
+  };
+  shuffle_state: boolean;
+  repeat_state: string;
+  progress_ms: number;
+  context?: {
+    uri: string;
+    type: string;
+    href: string;
+    external_urls: {
+      spotify: string;
+    };
+  } | null;
+}
+
+interface QueueTrack {
+  uri: string;
+  [key: string]: unknown;
+}
+
+interface QueueResponse {
+  queue: QueueTrack[];
+}
+
+// Add better types for spotify-web-api-js
+declare module 'spotify-web-api-js' {
+  interface SpotifyWebApiJs {
+    // Authentication
+    setAccessToken(token: string): void;
+    getAccessToken(): string | null;
+
+    // User Profile
+    getMe(): Promise<SpotifyApi.CurrentUsersProfileResponse>;
+    getMyCurrentPlaybackState(): Promise<SpotifyApi.CurrentPlaybackResponse>;
+
+    // Track Features
+    getAudioFeaturesForTrack(trackId: string): Promise<SpotifyApi.AudioFeaturesObject>;
+    getAudioAnalysisForTrack(trackId: string): Promise<SpotifyApi.AudioAnalysisObject>;
+
+    // Playlists
+    getUserPlaylists(userId: string, options?: { limit?: number }): Promise<SpotifyApi.ListOfUsersPlaylistsResponse>;
+    getPlaylist(playlistId: string): Promise<SpotifyApi.SinglePlaylistResponse>;
+    getPlaylistTracks(playlistId: string): Promise<SpotifyApi.PlaylistTrackResponse>;
+    createPlaylist(userId: string, options: { 
+      name: string; 
+      public?: boolean; 
+      collaborative?: boolean; 
+      description?: string 
+    }): Promise<SpotifyApi.CreatePlaylistResponse>;
+    addTracksToPlaylist(playlistId: string, trackUris: string[]): Promise<SpotifyApi.AddTracksToPlaylistResponse>;
+    unfollowPlaylist(playlistId: string): Promise<void>;
+    followPlaylist(playlistId: string, options?: { public?: boolean }): Promise<void>;
+    areFollowingPlaylist(playlistId: string, userIds: string[]): Promise<boolean[]>;
+
+    // Track Control
+    play(options?: {
+      uris?: string[];
+      context_uri?: string;
+      offset?: { position: number };
+    }): Promise<void>;
+    pause(): Promise<void>;
+    setShuffle(state: boolean): Promise<void>;
+    setRepeat(state: 'off' | 'track' | 'context'): Promise<void>;
+    setVolume(volumePercent: number): Promise<void>;
+    skipToNext(): Promise<void>;
+    skipToPrevious(): Promise<void>;
+    seek(positionMs: number): Promise<void>;
+
+    // Tracks & Artists
+    getTrack(trackId: string): Promise<SpotifyApi.TrackObjectFull>;
+    getArtist(artistId: string): Promise<SpotifyApi.ArtistObjectFull>;
+    getArtistRelatedArtists(artistId: string): Promise<SpotifyApi.ArtistsRelatedArtistsResponse>;
+    getMyQueue(): Promise<QueueResponse>;
+    containsMySavedTracks(trackIds: string[]): Promise<boolean[]>;
+    addToMySavedTracks(trackIds: string[]): Promise<void>;
+    removeFromMySavedTracks(trackIds: string[]): Promise<void>;
+
+    // User Data
+    getMyTopTracks(options: { time_range?: string; limit?: number }): Promise<SpotifyApi.UsersTopTracksResponse>;
+    getMyTopArtists(options: { time_range?: string; limit?: number }): Promise<SpotifyApi.UsersTopArtistsResponse>;
+    getMyRecentlyPlayedTracks(options: { limit?: number }): Promise<SpotifyApi.UsersRecentlyPlayedTracksResponse>;
+    getFollowedArtists(options?: { limit?: number }): Promise<{ artists: { items: SpotifyApi.ArtistObjectFull[] } }>;
+
+    // Recommendations
+    getRecommendations(options: RecommendationsOptions): Promise<SpotifyApi.RecommendationsObject>;
+  }
+}
 
 interface RecommendationsOptions {
   limit?: number;
@@ -52,42 +146,226 @@ interface RecommendationsOptions {
   max_valence?: number;
 }
 
-// Define the current track interface to fix TypeScript errors
-interface CurrentPlaybackState {
-  is_playing: boolean;
-  item: SpotifyApi.TrackObjectFull;
-  progress_ms: number;
-  device: any;
-  context?: SpotifyApi.ContextObject;
-  [key: string]: any;
-}
-
 // Store token expiration timestamp
 let tokenExpirationTime: number | null = null;
 const TOKEN_EXPIRATION_BUFFER = 5 * 60 * 1000; // 5 minutes buffer
 
-// Global request queue and rate limiting mechanism
-const requestQueue: Array<() => Promise<any>> = [];
+// Simple in-memory suppression for noisy logs and short-term caching for 403/404
+const logSuppressMap = new Map<string, number>();
+function shouldLog(key: string, windowMs = 60 * 1000) {
+  const last = logSuppressMap.get(key) || 0;
+  if (Date.now() - last > windowMs) {
+    logSuppressMap.set(key, Date.now());
+    return true;
+  }
+  return false;
+}
+function logOnce(key: string, level: 'warn' | 'error' | 'debug' | 'log' = 'warn', ...args: unknown[]) {
+  if (shouldLog(key)) {
+    const fn = ((console as unknown) as Record<string, (...a: unknown[]) => void>)[level] || console.warn;
+    fn(...args);
+  }
+}
+
+// Enhanced rate limiting with exponential backoff and circuit breaker
+const requestQueue: Array<RequestQueueItem<unknown>> = [];
 let isProcessingQueue = false;
 let lastRequestTime = 0;
-const MIN_REQUEST_INTERVAL = 100; // Minimum 100ms between requests
-const RATE_LIMIT_RESET_TIME = 60 * 1000; // Default 1 minute for rate limit reset
+const MIN_REQUEST_INTERVAL = 500; // Increased to 500ms between requests
 
 // Global counter to track consecutive API failures
 let consecutiveFailures = 0;
-const MAX_CONSECUTIVE_FAILURES = 3;
-const COOL_DOWN_PERIOD = 10000; // 10 seconds cool down after multiple failures
+const MAX_CONSECUTIVE_FAILURES = 2; // Reduced to 2 failures before circuit breaker
+const COOL_DOWN_PERIOD = 30000; // Increased to 30 seconds cool down
 
-if (!clientId || !redirectUri) {
-  throw new Error("Spotify client ID or redirect URI is missing in the environment variables.");
+let lastApiCall = 0;
+const MIN_API_INTERVAL = 2000; // Increased to 2 seconds between API calls
+
+// Circuit breaker state
+let circuitBreakerOpen = false;
+let circuitBreakerOpenUntil = 0;
+const CIRCUIT_BREAKER_TIMEOUT = 60000; // 1 minute circuit breaker timeout
+
+// Request deduplication cache
+const requestCache = new Map<string, { timestamp: number; promise: Promise<any> }>();
+const CACHE_DURATION = 10000; // Increased to 10 seconds cache for identical requests
+
+// Exponential backoff state
+let backoffMultiplier = 1;
+const MAX_BACKOFF_MULTIPLIER = 8;
+async function rateLimitedFetch(url: string, options?: RequestInit) {
+  // Check circuit breaker
+  if (circuitBreakerOpen && Date.now() < circuitBreakerOpenUntil) {
+    const remainingTime = Math.ceil((circuitBreakerOpenUntil - Date.now()) / 1000);
+    throw new Error(`Circuit breaker open, retry after ${remainingTime} seconds`);
+  }
+
+  // Check for cached identical request
+  const cacheKey = `${url}:${JSON.stringify(options)}`;
+  const cached = requestCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    return cached.promise;
+  }
+
+  // Respect a global backoff window if set due to previous 429s
+  const now = Date.now();
+  if (typeof (globalThis as any).__SPOTIFY_GLOBAL_BACKOFF_UNTIL === 'number' && (globalThis as any).__SPOTIFY_GLOBAL_BACKOFF_UNTIL > now) {
+    const retryAfter = (globalThis as any).__SPOTIFY_GLOBAL_BACKOFF_UNTIL - now;
+    const err = new Error('Rate limited');
+    (err as any).retryAfterMs = retryAfter;
+    throw err;
+  }
+  
+  // Apply exponential backoff delay
+  const exponentialDelay = MIN_API_INTERVAL * backoffMultiplier;
+  const now2 = Date.now();
+  const wait = Math.max(0, exponentialDelay - (now2 - lastApiCall));
+  if (wait > 0) {
+    console.log(`[rateLimitedFetch] Waiting ${wait}ms before request (backoff multiplier: ${backoffMultiplier})`);
+    await new Promise(res => setTimeout(res, wait));
+  }
+  lastApiCall = Date.now();
+  
+  const promise = fetch(url, options);
+  
+  // Cache the promise
+  requestCache.set(cacheKey, { timestamp: now, promise });
+  
+  // Clean up old cache entries
+  for (const [key, value] of requestCache.entries()) {
+    if (Date.now() - value.timestamp > CACHE_DURATION) {
+      requestCache.delete(key);
+    }
+  }
+  
+  return promise;
 }
 
-export const SPOTIFY_AUTH_URL = `${authCreds.auth_endpoint}?client_id=${clientId}&redirect_uri=${redirectUri}&scope=${encodeURIComponent(authCreds.scope)}&response_type=${authCreds.response_type}&state=${authCreds.state}`;
+// Helper functions for rate limiting
+function handleRateLimitError() {
+  consecutiveFailures++;
+  backoffMultiplier = Math.min(backoffMultiplier * 2, MAX_BACKOFF_MULTIPLIER);
+  
+  if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+    circuitBreakerOpen = true;
+    circuitBreakerOpenUntil = Date.now() + CIRCUIT_BREAKER_TIMEOUT;
+    console.warn(`[RateLimit] Circuit breaker opened for ${CIRCUIT_BREAKER_TIMEOUT/1000}s after ${consecutiveFailures} failures`);
+  }
+}
 
-export const setAccessToken = (token: string, expiresIn?: number) => {
+function handleSuccessfulRequest() {
+  consecutiveFailures = 0;
+  backoffMultiplier = Math.max(1, backoffMultiplier / 2);
+  circuitBreakerOpen = false;
+}
+
+// Global backoff helper (stored on globalThis so multiple modules share it)
+// Note: currently unused in this file; retained for future rate limit handling
+
+export class RateLimitError extends Error {
+  retryAfterMs: number;
+  constructor(retryAfterMs: number) {
+    super('Rate limited');
+    this.name = 'RateLimitError';
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+if (!clientId || !redirectUri) {
+  const hints = [
+    !clientId ? 'VITE_SPOTIFY_CLIENT_ID' : undefined,
+    !redirectUri ? 'VITE_REDIRECT_URI' : undefined,
+  ].filter(Boolean).join(', ');
+  console.error('[spotify] Missing required env vars:', hints, '\nAdd them to .env.local and restart the dev server.');
+  try {
+    console.debug('[spotify] authCreds snapshot', {
+      client_id: authCreds.client_id ? 'Set' : 'Not set',
+      redirect_uri: authCreds.redirect_uri ? 'Set' : 'Not set',
+      auth_endpoint: authCreds.auth_endpoint,
+      token_endpoint: authCreds.token_endpoint,
+    });
+  } catch {}
+}
+
+// Build a standard (non-PKCE) authorize URL: encodes redirect_uri and scope explicitly
+export function buildAuthorizeUrl(
+  baseAuthEndpoint: string,
+  clientIdValue: string,
+  redirectUriValue: string,
+  scopes: string,
+  responseType: string,
+  stateValue: string
+): string {
+  return `${baseAuthEndpoint}?client_id=${clientIdValue}` +
+    `&redirect_uri=${encodeURIComponent(redirectUriValue)}` +
+    `&scope=${encodeURIComponent(scopes)}` +
+    `&response_type=${encodeURIComponent(responseType)}` +
+    `&state=${encodeURIComponent(stateValue)}`;
+}
+
+export const SPOTIFY_AUTH_URL = buildAuthorizeUrl(
+  authCreds.auth_endpoint,
+  String(clientId || ''),
+  String(redirectUri || ''),
+  authCreds.scope,
+  authCreds.response_type,
+  authCreds.state
+);
+
+export function isAuthEnvReady(): boolean {
+  return Boolean(clientId && redirectUri);
+}
+
+// Build a PKCE-enabled authorization URL and store the code verifier in localStorage
+import { generateCodeVerifier, generateCodeChallenge } from './authCreds';
+
+export const buildPkceAuthUrl = async (): Promise<string> => {
+  try {
+    if (!clientId) {
+      throw new Error('[spotify] VITE_SPOTIFY_CLIENT_ID is missing');
+    }
+    if (!redirectUri) {
+      throw new Error('[spotify] VITE_REDIRECT_URI is missing');
+    }
+    const codeVerifier = generateCodeVerifier();
+    localStorage.setItem('pkce_code_verifier', codeVerifier);
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    const params = new URLSearchParams({
+      client_id: String(clientId || ''),
+      response_type: 'code',
+      redirect_uri: String(redirectUri || ''),
+      code_challenge_method: 'S256',
+      code_challenge: codeChallenge,
+      state: authCreds.state,
+      scope: authCreds.scope,
+    });
+    return `${authCreds.auth_endpoint}?${params.toString()}`;
+  } catch (e) {
+    console.error('[buildPkceAuthUrl] Failed to build PKCE auth URL', e);
+    // Fallback to non-PKCE URL
+    return SPOTIFY_AUTH_URL;
+  }
+};
+
+interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  refresh_token?: string;
+}
+
+interface TokenError {
+  error: string;
+  error_description?: string;
+}
+
+import { scheduleTokenRefresh, clearTokenRefreshSchedule } from './tokenRefresh';
+import { getSpotifyRecommendations as getPromptRecommendations } from '../utils/spotifyRecommendations';
+
+export const setAccessToken = (token: string, expiresIn?: number, refreshToken?: string) => {
   spotify.setAccessToken(token);
   
-  // Set token expiration time if expires_in is provided
+  // Set token expiration time with buffer for early refresh
   if (expiresIn) {
     tokenExpirationTime = Date.now() + (expiresIn * 1000) - TOKEN_EXPIRATION_BUFFER;
   } else {
@@ -98,31 +376,138 @@ export const setAccessToken = (token: string, expiresIn?: number) => {
   // Store in localStorage
   localStorage.setItem('spotify_token', token);
   localStorage.setItem('spotify_token_expires_at', tokenExpirationTime.toString());
+  
+  // Store refresh token if provided
+  if (refreshToken) {
+    localStorage.setItem('spotify_refresh_token', refreshToken);
+  }
+
+  // Schedule token refresh
+  if (expiresIn) {
+    scheduleTokenRefresh(expiresIn);
+  }
 };
 
 // Check if the token is valid
 export const isTokenValid = () => {
   const token = localStorage.getItem('spotify_token');
   const expiresAt = localStorage.getItem('spotify_token_expires_at');
+  const refreshToken = localStorage.getItem('spotify_refresh_token');
   
   if (!token || !expiresAt) {
     return false;
   }
   
+  // If we have a refresh token and we're within the buffer window, consider it still valid
+  // as we can refresh it
+  if (refreshToken) {
+    return Date.now() < (parseInt(expiresAt) + TOKEN_EXPIRATION_BUFFER);
+  }
+  
   return Date.now() < parseInt(expiresAt);
 };
 
-// Refresh token by redirecting to login
-export const refreshToken = () => {
-  console.log('Token expired, redirecting to login...');
-  // Don't clear the token immediately, let the user see the error first
-  window.location.href = SPOTIFY_AUTH_URL;
-};
+// Refresh token using PKCE flow
+export const refreshToken = async (): Promise<string | null> => {
+  console.log('[refreshToken] Attempting to refresh token');
+  const refreshToken = localStorage.getItem('spotify_refresh_token');
+  
+  if (!refreshToken) {
+    console.log('[refreshToken] No refresh token found, redirecting to login');
+    window.location.href = SPOTIFY_AUTH_URL;
+    return null;
+  }
+  
+  const maxRetries = 3;
+  let response: Response | null = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+  response = await fetch(authCreds.token_endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
+          client_id: clientId
+        }).toString(),
+      });
+
+      // If response is undefined/null, treat as transient and retry
+      if (!response) {
+        console.warn('[refreshToken] No response received, retrying...', attempt);
+        await new Promise((res) => setTimeout(res, 200 * attempt));
+        continue;
+      }
+
+      // Handle client errors (invalid refresh token)
+      if (response && (response.status === 400 || response.status === 401)) {
+        // Try to parse error body only if json() exists
+        if (response && typeof response.json === 'function') {
+          try {
+            const errBody = await response.json().catch(() => null) as TokenError | null;
+            console.error('[refreshToken] Failed to refresh token:', errBody || response.statusText);
+          } catch (parseErr) {
+            console.error('[refreshToken] Failed to parse error body', parseErr);
+          }
+        } else {
+          console.error('[refreshToken] Failed to refresh token: status', response.status, response.statusText);
+        }
+        localStorage.removeItem('spotify_token');
+        localStorage.removeItem('spotify_token_expires_at');
+        localStorage.removeItem('spotify_refresh_token');
+        // Prefer assign which works better with test spies; also set href if possible
+        try {
+          if (typeof window.location.assign === 'function') {
+            window.location.assign(SPOTIFY_AUTH_URL);
+          } else {
+            window.location.href = SPOTIFY_AUTH_URL as unknown as string;
+          }
+        } catch (assignErr) {
+          console.debug('[refreshToken] Failed to redirect using assign/href', assignErr);
+          try {
+            window.location.href = SPOTIFY_AUTH_URL as unknown as string;
+          } catch (hrefErr) {
+            console.error('[refreshToken] Fallback redirect failed', hrefErr);
+          }
+        }
+        return null;
+      }
+
+      // If successful, parse and return
+      if (response && response.ok) {
+        // response.json may not be a function on some mocked responses; guard it
+        const data = response && typeof response.json === 'function'
+          ? await response.json() as TokenResponse
+          : ({} as TokenResponse);
+        console.log('[refreshToken] Token refreshed successfully');
+        setAccessToken(
+          data.access_token,
+          data.expires_in,
+          (data as TokenResponse).refresh_token || refreshToken
+        );
+        return (data as TokenResponse).access_token;
+      }
+
+      // For other response codes (e.g., 5xx), treat as transient and retry
+      console.warn('[refreshToken] Unexpected status, will retry if attempts remain:', response.status);
+      await new Promise((res) => setTimeout(res, 200 * attempt));
+    } catch (err) {
+      console.warn('[refreshToken] Fetch error, retrying if attempts remain:', err);
+      await new Promise((res) => setTimeout(res, 200 * attempt));
+    }
+  }
+
+  console.error('[refreshToken] Failed to refresh token after retries');
+  return null;
+  };
 
 // Ensure token is valid before making API calls
-export const ensureValidToken = async () => {
+export const ensureValidToken = async (): Promise<string | null> => {
   const token = localStorage.getItem('spotify_token');
   const expiresAt = localStorage.getItem('spotify_token_expires_at');
+  const hasRefreshToken = localStorage.getItem('spotify_refresh_token') !== null;
   
   console.log('[ensureValidToken] Checking token. ExpiresAt:', expiresAt, 'CurrentTime:', Date.now());
 
@@ -133,14 +518,39 @@ export const ensureValidToken = async () => {
   
   const currentTime = Date.now();
   const expirationTime = parseInt(expiresAt);
+  const timeUntilExpiry = expirationTime - currentTime;
 
-  if (currentTime < expirationTime) {
-    console.log('[ensureValidToken] Token is considered valid by client-side expiry check. Remaining time (ms):', expirationTime - currentTime);
+  // If token is still valid and not near expiration, use it
+  if (timeUntilExpiry > TOKEN_EXPIRATION_BUFFER) {
+    console.log('[ensureValidToken] Token is valid. Remaining time (ms):', timeUntilExpiry);
+    try {
+      // Ensure spotify-web-api-js client has this token so subsequent
+      // calls using the spotify instance include Authorization header.
+      spotify.setAccessToken(token as string);
+    } catch (e) {
+      console.debug('[ensureValidToken] Failed to set spotify access token on client', e);
+    }
     return token;
   }
   
-  console.log('[ensureValidToken] Token expired by client-side check. Attempting full re-authentication.');
-  refreshToken();
+  // If token is expired or near expiration and we have a refresh token, try to refresh
+  if (hasRefreshToken) {
+    console.log('[ensureValidToken] Token near expiration. Attempting refresh.');
+    const newToken = await refreshToken();
+    if (newToken) {
+      console.log('[ensureValidToken] Token refreshed successfully.');
+      return newToken;
+    }
+    // If refreshToken returned null, another concurrent refresh may have stored a token
+    const storedAfterAttempt = localStorage.getItem('spotify_token');
+    if (storedAfterAttempt) {
+      console.log('[ensureValidToken] Found token in localStorage after refresh attempt. Using stored token.');
+      return storedAfterAttempt;
+    }
+  }
+  
+  console.log('[ensureValidToken] Token expired and cannot be refreshed. Redirecting to login.');
+  window.location.href = SPOTIFY_AUTH_URL;
   return null;
 };
 
@@ -156,19 +566,39 @@ const getFallbackRecommendations = async () => {
     ];
     const randomGenre = genres[Math.floor(Math.random() * genres.length)];
     
-    // @ts-ignore: Suppress error due to type incompatibility with spotify-web-api-js
-    const response = await queueRequest(() => spotify.getRecommendations({
-      seed_genres: [randomGenre],
-      limit: 10
-    } as RecommendationsOptions));
-    
-    if (response && (response as SpotifyApi.RecommendationsObject).tracks && (response as SpotifyApi.RecommendationsObject).tracks.length > 0) {
-      console.log(`[getFallbackRecommendations] Got ${(response as SpotifyApi.RecommendationsObject).tracks.length} fallback genre-based recommendations.`);
-      return response;
-    } else {
-      console.log('[getFallbackRecommendations] No fallback recommendations found.');
-      return { tracks: [] };
+    // First try SDK
+    try {
+      const response = await queueRequest(() => spotify.getRecommendations({
+        seed_genres: [randomGenre],
+        limit: 10
+      }));
+      if (response && (response as SpotifyApi.RecommendationsObject).tracks && (response as SpotifyApi.RecommendationsObject).tracks.length > 0) {
+        console.log(`[getFallbackRecommendations] Got ${(response as SpotifyApi.RecommendationsObject).tracks.length} fallback genre-based recommendations (SDK).`);
+        return response;
+      }
+    } catch (e) {
+      console.warn('[getFallbackRecommendations] SDK failed, trying direct fetch:', (e as Error)?.message || e);
     }
+
+    // Direct HTTP fallback
+    try {
+      const params = new URLSearchParams({ seed_genres: randomGenre, limit: '10' });
+      const resp = await fetch(`https://api.spotify.com/v1/recommendations?${params.toString()}`, {
+        headers: { 'Authorization': `Bearer ${spotify.getAccessToken()}` }
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (Array.isArray(data?.tracks) && data.tracks.length > 0) {
+          console.log(`[getFallbackRecommendations] Got ${data.tracks.length} fallback genre-based recommendations (direct).`);
+          return data;
+        }
+      }
+    } catch (httpErr) {
+      console.warn('[getFallbackRecommendations] Direct fetch failed:', (httpErr as Error)?.message || httpErr);
+    }
+
+    console.log('[getFallbackRecommendations] No fallback recommendations found.');
+    return { tracks: [] };
   } catch (error) {
     console.error('[getFallbackRecommendations] Error during fallback recommendations:', error);
     return { tracks: [] };
@@ -215,45 +645,17 @@ export const getRecommendationsFromUserProfile = async () => {
     });
     
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        // Token expired or forbidden, force re-auth
+        refreshToken();
+        throw new Error('Token expired or forbidden');
+      }
       throw new Error(`Failed to get recommendations: ${response.status}`);
     }
-    
     return await response.json();
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error getting personalized recommendations:', error);
     // Fall back to genre-based recommendations if personal ones fail
-    return getFallbackRecommendations();
-  }
-};
-
-const getGenreBasedRecommendations = async () => {
-  try {
-    // Use only verified working genres in the correct format
-    const verifiedGenres = [
-      'pop', 'rock', 'electronic', 'hip-hop', 'indie', 
-      'alternative', 'jazz', 'metal', 'dance', 'r-n-b',
-      'soul', 'country', 'folk', 'reggae', 'disco',
-      'classical', 'blues'
-    ];
-    const randomGenres: string[] = [];
-    
-    // Pick 2 random genres from the verified list
-    for (let i = 0; i < 2; i++) {
-      const randomIndex = Math.floor(Math.random() * verifiedGenres.length);
-      randomGenres.push(verifiedGenres[randomIndex]);
-      verifiedGenres.splice(randomIndex, 1); // Remove to avoid duplicates
-    }
-    
-    console.log('Using genres for recommendations:', randomGenres.join(', '));
-    
-    // Use queueRequest to throttle API calls
-    return await queueRequest(() => spotify.getRecommendations({
-      seed_genres: randomGenres,
-      limit: 10 // Limit the number of recommendations
-    } as RecommendationsOptions));
-  } catch (error) {
-    console.error('Error getting genre-based recommendations:', error);
-    // Fall back to generic recommendations or an empty array if genre-based also fails
     return getFallbackRecommendations();
   }
 };
@@ -319,21 +721,134 @@ export const getRecommendations = async (
     }
 
     console.log('[getRecommendations] Attempting to get recommendations with params:', recommendationParams);
-    
-    // @ts-ignore: Suppress error due to type incompatibility with spotify-web-api-js
-    const recommendations: SpotifyApi.RecommendationsObject = await spotify.getRecommendations(recommendationParams as RecommendationsOptions);
-    
-    if (recommendations && recommendations.tracks && recommendations.tracks.length > 0) {
-      console.log(`[getRecommendations] Got ${recommendations.tracks.length} recommendations successfully.`);
-      return recommendations;
-    } else {
-      console.log('[getRecommendations] No recommendations returned with provided seeds, trying user profile recommendations.');
-      return await getRecommendationsFromUserProfile();
+
+    // First try via SDK
+    try {
+      const recommendations = await spotify.getRecommendations(recommendationParams);
+      if (recommendations && recommendations.tracks && recommendations.tracks.length > 0) {
+        console.log(`[getRecommendations] Got ${recommendations.tracks.length} recommendations successfully (SDK).`);
+        return recommendations;
+      }
+    } catch (sdkErr) {
+      console.warn('[getRecommendations] SDK getRecommendations failed, trying direct fetch:', (sdkErr as Error)?.message || sdkErr);
     }
+
+    // Fallback to direct HTTP fetch (more tolerant to edge cases)
+    const params = new URLSearchParams();
+    if (recommendationParams.seed_tracks?.length) params.append('seed_tracks', recommendationParams.seed_tracks.join(','));
+    if (recommendationParams.seed_artists?.length) params.append('seed_artists', recommendationParams.seed_artists.join(','));
+    if (recommendationParams.seed_genres?.length) params.append('seed_genres', recommendationParams.seed_genres.join(','));
+    params.append('limit', String(recommendationParams.limit || 20));
+
+    try {
+      const resp = await fetch(`https://api.spotify.com/v1/recommendations?${params.toString()}`, {
+        headers: { 'Authorization': `Bearer ${spotify.getAccessToken()}` }
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && Array.isArray(data.tracks) && data.tracks.length > 0) {
+          console.log(`[getRecommendations] Got ${data.tracks.length} recommendations successfully (direct).`);
+          return data;
+        }
+      } else {
+        console.warn('[getRecommendations] Direct fetch failed with status:', resp.status);
+      }
+    } catch (httpErr) {
+      console.warn('[getRecommendations] Direct fetch threw error:', (httpErr as Error)?.message || httpErr);
+    }
+
+    // Local fallback: build recommendations from artist top-tracks and genre searches
+    try {
+      const local = await getLocalRecommendations(finalSeedTracks, finalSeedArtists, finalSeedGenres, recommendationParams.limit || 20);
+      if (local.tracks && local.tracks.length > 0) {
+        console.log(`[getRecommendations] Got ${local.tracks.length} recommendations (local fallback).`);
+        return local;
+      }
+    } catch (localErr) {
+      console.warn('[getRecommendations] Local fallback failed:', (localErr as Error)?.message || localErr);
+    }
+
+    // As a final fallback, try prompt-based search recommendations
+    try {
+      const accessToken = spotify.getAccessToken() as string;
+      const promptResults = await getPromptRecommendations(accessToken, {
+        seedTracks: finalSeedTracks,
+        seedArtists: finalSeedArtists,
+        seedGenres: finalSeedGenres,
+        limit: recommendationParams.limit || 20,
+      });
+      if (Array.isArray(promptResults) && promptResults.length > 0) {
+        // Normalize shape to { tracks: [...] }
+        return { tracks: promptResults } as SpotifyApi.RecommendationsObject;
+      }
+    } catch (promptErr) {
+      console.warn('[getRecommendations] Prompt-based fallback failed:', (promptErr as Error)?.message || promptErr);
+    }
+
+    console.log('[getRecommendations] No recommendations returned, trying user profile recommendations.');
+    return await getRecommendationsFromUserProfile();
   } catch (error) {
-    console.error('[getRecommendations] Error in getRecommendations:', error);
+    if (error instanceof Error) {
+      console.error('[getRecommendations] Error in getRecommendations:', error.message);
+    } else {
+      console.error('[getRecommendations] Unknown error in getRecommendations');
+    }
     // Fall back to user profile recommendations on error
     return await getRecommendationsFromUserProfile();
+  }
+};
+
+// Build simple local recommendations using artists' top tracks and genre search
+export const getLocalRecommendations = async (
+  seedTracks: string[] = [],
+  seedArtists: string[] = [],
+  seedGenres: string[] = [],
+  limit = 20
+): Promise<SpotifyApi.RecommendationsObject> => {
+  const token = await ensureValidToken();
+  if (!token) return { tracks: [] } as any;
+
+  try {
+    const bearer = { headers: { Authorization: `Bearer ${spotify.getAccessToken()}` } };
+
+    // Collect artist IDs from seeds
+    const artistIds = new Set<string>(seedArtists);
+    for (const trackId of seedTracks) {
+      const track = await spotify.getTrack(trackId);
+      (track?.artists || []).forEach((a: any) => a?.id && artistIds.add(a.id));
+    }
+
+    const candidatesMap = new Map<string, any>();
+
+    // From artists' top tracks
+    for (const artistId of artistIds) {
+      try {
+        const res = await fetch(`https://api.spotify.com/v1/artists/${artistId}/top-tracks?market=from_token`, bearer);
+        if (res.ok) {
+          const data = await res.json();
+          (data?.tracks || []).forEach((t: any) => { if (t?.id) candidatesMap.set(t.id, t); });
+        }
+      } catch {}
+    }
+
+    // From genre searches
+    for (const genre of seedGenres.slice(0, 3)) {
+      try {
+        const res = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(`genre:"${genre}"`)}&type=track&limit=20`, bearer);
+        if (res.ok) {
+          const data = await res.json();
+          (data?.tracks?.items || []).forEach((t: any) => { if (t?.id) candidatesMap.set(t.id, t); });
+        }
+      } catch {}
+    }
+
+    // Remove exact seed tracks, take up to limit
+    seedTracks.forEach(id => candidatesMap.delete(id));
+    const tracks = Array.from(candidatesMap.values()).slice(0, limit);
+    return { tracks } as any;
+  } catch (e) {
+    console.warn('[getLocalRecommendations] Failed to build local recommendations:', (e as Error)?.message || e);
+    return { tracks: [] } as any;
   }
 };
 
@@ -344,64 +859,239 @@ export const getCurrentUser = async () => {
   
   try {
     return await spotify.getMe();
-  } catch (error: any) {
-    if (error.status === 401 || error.status === 403) {
+  } catch (error) {
+    if (error instanceof Error && 'status' in error && 
+        (error as { status: number }).status === 401 || 
+        (error as { status: number }).status === 403) {
       refreshToken();
     }
     throw new Error('Error fetching user profile');
   }
 };
 
-export const getCurrentTrack = async () => {
+export const getCurrentTrack = async (userId?: string) => {
   // Ensure token is valid before proceeding
   if (!(await ensureValidToken())) {
     throw new Error('Token expired');
   }
   
-  try {
-    const response = await spotify.getMyCurrentPlaybackState() as CurrentPlaybackState;
-    if (!response) {
-      return null;
-    }
-    return response;
-  } catch (error: any) {
-    if (error.status === 401 || error.status === 403) {
-      refreshToken();
-      throw new Error('Token expired');
-    }
-    throw new Error('Error fetching current track');
-  }
-};
-
-export const getQueue = async () => {
-  // Ensure token is valid before proceeding
-  if (!(await ensureValidToken())) {
-    throw new Error('Token expired');
-  }
+  // Generate cache key if userId provided
+  const cacheKey = userId ? `current_track:${userId}` : null;
   
   try {
-    const response = await fetch('https://api.spotify.com/v1/me/player/queue', {
-      headers: {
-        Authorization: `Bearer ${spotify.getAccessToken()}`,
+    // Check cache first
+    if (cacheKey) {
+      const cached = Cache.getSpotifyData(cacheKey);
+      if (cached) {
+        return cached as PlaybackState;
+      }
+    }
+    
+    // Check rate limiting
+    if (userId) {
+      const rateLimit = checkRateLimit(userId);
+      if (!rateLimit.allowed) {
+        throw new Error(`Rate limited. Retry after ${rateLimit.retryAfter} seconds`);
+      }
+    }
+    
+    const response = await smartRequest(
+      'https://api.spotify.com/v1/me/player',
+      {
+        headers: {
+          Authorization: `Bearer ${spotify.getAccessToken()}`,
+        },
       },
-    });
+      userId || undefined,
+      cacheKey || undefined,
+      5000 // 5 second cache for current track
+    );
     
     if (response.status === 401 || response.status === 403) {
       refreshToken();
       throw new Error('Token expired');
     }
     
-    if (!response.ok) {
-      throw new Error('Failed to fetch queue');
+    if (response.status === 429) {
+      // Handle rate limiting
+      const retryAfter = response.headers.get('Retry-After') || '1';
+      const retryMs = parseInt(retryAfter) * 1000;
+      (globalThis as any).__SPOTIFY_GLOBAL_BACKOFF_UNTIL = Date.now() + retryMs;
+      handleRateLimitError();
+      logOnce('getCurrentTrack-429', 'warn', `Rate limited, backing off for ${retryAfter}s`);
+      throw new Error(`Rate limited, retry after ${retryAfter} seconds`);
     }
     
-    return await response.json();
-  } catch (error: any) {
+    if (response.status === 204) {
+      // No active device or no track playing
+      console.log('[getCurrentTrack] No active device or no track playing');
+      return null;
+    }
+    
+    if (!response.ok) {
+      console.warn(`[getCurrentTrack] Unexpected status ${response.status}: ${response.statusText}`);
+      return null;
+    }
+    
+    const result = await response.json();
+    handleSuccessfulRequest(); // Reset rate limiting on success
+    
+    // Cache the result
+    if (cacheKey) {
+      Cache.cacheSpotifyData(cacheKey, result, 5000);
+    }
+    
+    return result as PlaybackState;
+  } catch (error) {
     // If the error is already handled by our token refresh logic, re-throw it
-    if (error.message === 'Token expired') {
+    if (error instanceof Error && error.message === 'Token expired') {
       throw error;
     }
-    throw new Error('Error fetching queue');
+    if (error instanceof Error && error.message.includes('Rate limited')) {
+      throw error;
+    }
+    if (error instanceof Error && error.message.includes('Circuit breaker')) {
+      throw error;
+    }
+    
+    // For network errors or other issues, return null instead of throwing
+    console.warn('[getCurrentTrack] Network or other error, returning null:', error instanceof Error ? error.message : 'Unknown error');
+    return null;
+  }
+};
+
+/**
+ * Get system performance statistics for monitoring
+ */
+export const getSystemStats = () => {
+  return {
+    rateLimiter: getRateLimitStats(),
+    connectionPool: getConnectionPoolStats(),
+    cache: Cache.getAllCacheStats(),
+    timestamp: Date.now()
+  };
+};
+
+/**
+ * Get user-specific rate limit status
+ */
+export const getUserRateLimitStatus = (userId: string) => {
+  return {
+    userId,
+    status: checkRateLimit(userId),
+    timestamp: Date.now()
+  };
+};
+
+export const getQueue = async (userId?: string) => {
+  // Ensure token is valid before proceeding
+  if (!(await ensureValidToken())) {
+    throw new Error('Token expired');
+  }
+  
+  // Generate cache key if userId provided
+  const cacheKey = userId ? `queue:${userId}` : null;
+  
+  try {
+    // Check cache first
+    if (cacheKey) {
+      const cached = Cache.getQueueData(userId!);
+      if (cached) {
+        return cached;
+      }
+    }
+    
+    // Check rate limiting
+    if (userId) {
+      const rateLimit = checkRateLimit(userId);
+      if (!rateLimit.allowed) {
+        throw new Error(`Rate limited. Retry after ${rateLimit.retryAfter} seconds`);
+      }
+    }
+    
+    const response = await smartRequest(
+      'https://api.spotify.com/v1/me/player/queue',
+      {
+        headers: {
+          Authorization: `Bearer ${spotify.getAccessToken()}`,
+        },
+      },
+      userId || undefined,
+      cacheKey || undefined,
+      30000 // 30 second cache for queue
+    );
+    
+    if (response.status === 401 || response.status === 403) {
+      refreshToken();
+      throw new Error('Token expired');
+    }
+    
+    if (response.status === 429) {
+      // Handle rate limiting
+      const retryAfter = response.headers.get('Retry-After') || '1';
+      const retryMs = parseInt(retryAfter) * 1000;
+      (globalThis as any).__SPOTIFY_GLOBAL_BACKOFF_UNTIL = Date.now() + retryMs;
+      handleRateLimitError();
+      logOnce('getQueue-429', 'warn', `Rate limited, backing off for ${retryAfter}s`);
+      throw new Error(`Rate limited, retry after ${retryAfter} seconds`);
+    }
+    
+    if (response.status === 404) {
+      // No active device or queue not available
+      console.log('[getQueue] No active device or queue not available');
+      const emptyQueue = { queue: [], currently_playing: null };
+      
+      // Cache empty queue result
+      if (cacheKey) {
+        Cache.cacheQueueData(userId!, emptyQueue);
+      }
+      
+      return emptyQueue;
+    }
+    
+    if (!response.ok) {
+      console.warn(`[getQueue] Unexpected status ${response.status}: ${response.statusText}`);
+      const emptyQueue = { queue: [], currently_playing: null };
+      
+      // Cache empty queue result
+      if (cacheKey) {
+        Cache.cacheQueueData(userId!, emptyQueue);
+      }
+      
+      return emptyQueue;
+    }
+    
+    const result = await response.json();
+    handleSuccessfulRequest(); // Reset rate limiting on success
+    
+    // Cache the result
+    if (cacheKey) {
+      Cache.cacheQueueData(userId!, result);
+    }
+    
+    return result;
+  } catch (error) {
+    // If the error is already handled by our token refresh logic, re-throw it
+    if (error instanceof Error && error.message === 'Token expired') {
+      throw error;
+    }
+    if (error instanceof Error && error.message.includes('Rate limited')) {
+      throw error;
+    }
+    if (error instanceof Error && error.message.includes('Circuit breaker')) {
+      throw error;
+    }
+    
+    // For network errors or other issues, return empty queue instead of throwing
+    console.warn('[getQueue] Network or other error, returning empty queue:', error instanceof Error ? error.message : 'Unknown error');
+    const emptyQueue = { queue: [], currently_playing: null };
+    
+    // Cache empty queue result
+    if (cacheKey) {
+      Cache.cacheQueueData(userId!, emptyQueue);
+    }
+    
+    return emptyQueue;
   }
 };
 
@@ -413,6 +1103,7 @@ export const playPause = async (playing: boolean) => {
       await spotify.pause();
     }
   } catch (error) {
+    console.error('Error toggling play/pause:', error instanceof Error ? error.message : 'Unknown error');
     throw new Error('Error toggling play/pause');
   }
 };
@@ -446,6 +1137,7 @@ export const previousTrack = async () => {
   try {
     await spotify.skipToPrevious();
   } catch (error) {
+    console.error('Error skipping to previous track:', error instanceof Error ? error.message : 'Unknown error');
     throw new Error('Error skipping to previous track');
   }
 };
@@ -463,6 +1155,7 @@ export const getCurrentTrackDetails = async () => {
   try {
     return await spotify.getMyCurrentPlaybackState();
   } catch (error) {
+    console.error('Error fetching current track details:', error instanceof Error ? error.message : 'Unknown error');
     throw new Error('Error fetching current track details');
   }
 };
@@ -509,6 +1202,7 @@ export const saveToPlaylist = async (trackId: string) => {
       throw new Error('No playlists found');
     }
   } catch (error) {
+    console.error('Error saving track to playlist:', error instanceof Error ? error.message : 'Unknown error');
     throw new Error('Error saving track to playlist');
   }
 };
@@ -517,6 +1211,7 @@ export const shufflePlaylist = async (shuffle: boolean) => {
   try {
     await spotify.setShuffle(shuffle);
   } catch (error) {
+    console.error('Error shuffling playlist:', error instanceof Error ? error.message : 'Unknown error');
     throw new Error('Error shuffling playlist');
   }
 };
@@ -540,6 +1235,7 @@ export const toggleRepeat = async (mode: 'off' | 'track' | 'context') => {
   try {
     await spotify.setRepeat(mode);
   } catch (error) {
+    console.error('Error toggling repeat:', error instanceof Error ? error.message : 'Unknown error');
     throw new Error('Error toggling repeat');
   }
 };
@@ -585,43 +1281,83 @@ export const getLyrics = async (trackId: string): Promise<{ lyrics: string | nul
   }
 
   try {
-    // Attempt to fetch synced lyrics from Spotify API first
-    const syncedLyricsResponse = await fetch(`https://api.spotify.com/v1/tracks/${trackId}/lyrics`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    if (syncedLyricsResponse.ok) {
-      const data = await syncedLyricsResponse.json();
-      // Spotify's synced lyrics format can vary; adapt as needed
-      if (data && data.lines) {
-        const syncedLyrics = data.lines.map((line: any) => ({ time: line.startTimeMs, text: line.words }));
-        return { lyrics: null, syncedLyrics };
+    // Attempt to fetch synced lyrics from Spotify API first (may 404)
+    try {
+      const syncedLyricsResponse = await fetch(`https://api.spotify.com/v1/tracks/${trackId}/lyrics`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (syncedLyricsResponse.ok) {
+        const data = await syncedLyricsResponse.json().catch(() => null);
+        if (data && (data as any).lines) {
+          const syncedLyrics = (data as any).lines.map((line: SpotifyApi.LyricsLine) => ({ time: parseInt(line.startTimeMs), text: line.words }));
+          return { lyrics: null, syncedLyrics };
+        }
       }
-    }
+    } catch {}
 
-    // Fallback to Musixmatch or other lyrics API if Spotify doesn't provide synced lyrics
-    const response = await fetch(`${window.location.origin}/api/lyrics?trackId=${trackId}`);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    const data = await response.json();
+    // Fetch track metadata for artist/title to query our backend lyrics providers
+    const track = await spotify.getTrack(trackId as string);
+    const primaryArtist = track?.artists?.[0]?.name || '';
+    const title = track?.name || '';
 
-    // Basic text lyrics from Musixmatch
-    if (data.lyrics) {
-      // Check if it's a rich synced lyrics format or plain text
-      if (data.lyrics.syncType === 'LINE_SYNCED') {
-        const syncedLyrics = data.lyrics.lines.map((line: any) => ({
-          time: parseFloat(line.startTimeMs),
-          text: line.words,
-        }));
-        return { lyrics: null, syncedLyrics };
-      } else {
-        return { lyrics: data.lyrics.body, syncedLyrics: null };
+    // Helper to try multiple base URLs (supports same-origin and local dev server)
+    const tryFetchJson = async (path: string) => {
+      // Only use same-origin to avoid noisy connection-refused errors when local server isn't running
+      const bases = [window.location.origin];
+      for (const base of bases) {
+        try {
+          const res = await fetch(`${base}${path}`);
+          if (res.ok) {
+            const contentType = res.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+              return await res.json().catch(() => null);
+            } else {
+              const text = await res.text().catch(() => '');
+              // Guard: if the response looks like an HTML document, treat as invalid
+              const looksLikeHtml = /^\s*<!doctype html/i.test(text) || /<html[\s>]/i.test(text);
+              if (looksLikeHtml) {
+                continue;
+              }
+              return text ? { lyrics: text } : null;
+            }
+          }
+        } catch {}
       }
-    }
-    
+      return null;
+    };
+
+    // Try Musixmatch first (JSON)
+    try {
+      const mmPath = `/api/lyrics/musixmatch?artist=${encodeURIComponent(primaryArtist)}&title=${encodeURIComponent(title)}`;
+      const mmData = await tryFetchJson(mmPath);
+      if (mmData) {
+        if (Array.isArray(mmData.syncedLyrics) && mmData.syncedLyrics.length > 0) {
+          return { lyrics: null, syncedLyrics: mmData.syncedLyrics };
+        }
+        if (typeof mmData.lyrics === 'string' && mmData.lyrics.length > 0) {
+          return { lyrics: mmData.lyrics, syncedLyrics: null };
+        }
+      }
+    } catch {}
+
+    // Fallback to alternative scrapers (AZLyrics / Lyrics.com)
+    try {
+      const altPath = `/api/lyrics/alternative?artist=${encodeURIComponent(primaryArtist)}&track=${encodeURIComponent(title)}`;
+      const altData = await tryFetchJson(altPath);
+      if (altData && typeof altData.lyrics === 'string' && altData.lyrics.length > 0) {
+        return { lyrics: altData.lyrics, syncedLyrics: null };
+      }
+    } catch {}
+
+    // As a final fallback, try NetEase
+    try {
+      const nePath = `/api/lyrics/netease?artist=${encodeURIComponent(primaryArtist)}&title=${encodeURIComponent(title)}`;
+      const neData = await tryFetchJson(nePath);
+      if (neData?.lrc && typeof neData.lrc === 'string') {
+        return { lyrics: neData.lrc as string, syncedLyrics: null };
+      }
+    } catch {}
+
     return { lyrics: null, syncedLyrics: null };
   } catch (error) {
     console.error('Error fetching lyrics:', error);
@@ -665,7 +1401,8 @@ export const getUserPlaylists = async () => {
     throw new Error('Token expired');
   }
   try {
-    const data = await spotify.getUserPlaylists({ limit: 50 });
+    const me = await spotify.getMe();
+    const data = await spotify.getUserPlaylists(me.id, { limit: 50 });
     return data.items;
   } catch (error) {
     console.error('Error getting user playlists:', error);
@@ -748,8 +1485,8 @@ export const seekToPosition = async (position_ms: number): Promise<void> => {
 declare module 'spotify-web-api-js' {
   interface SpotifyWebApiJs {
     getMyQueue(): Promise<{
-      currently_playing: any;
-      queue: any[];
+      currently_playing: SpotifyApi.TrackObjectFull;
+      queue: SpotifyApi.TrackObjectFull[];
     }>;
   }
 }
@@ -759,8 +1496,7 @@ export const getTopTracks = async (timeRange = 'medium_term', limit = 20) => {
     throw new Error('Token expired');
   }
   try {
-    // @ts-ignore: Suppress error due to type incompatibility with spotify-web-api-js
-    const data: SpotifyApi.UsersTopTracksResponse = await spotify.getMyTopTracks({ time_range: timeRange, limit: limit });
+    const data = await spotify.getMyTopTracks({ time_range: timeRange, limit: limit });
     return data;
   } catch (error) {
     console.error('Error fetching top tracks:', error);
@@ -773,8 +1509,7 @@ export const getTopArtists = async (timeRange = 'medium_term', limit = 20) => {
     throw new Error('Token expired');
   }
   try {
-    // @ts-ignore: Suppress error due to type incompatibility with spotify-web-api-js
-    const data: SpotifyApi.UsersTopArtistsResponse = await spotify.getMyTopArtists({ time_range: timeRange, limit: limit });
+    const data = await spotify.getMyTopArtists({ time_range: timeRange, limit: limit });
     return data;
   } catch (error) {
     console.error('Error fetching top artists:', error);
@@ -787,8 +1522,7 @@ export const getRecentlyPlayed = async (limit = 20) => {
     throw new Error('Token expired');
   }
   try {
-    // @ts-ignore: Suppress error due to type incompatibility with spotify-web-api-js
-    const data: SpotifyApi.UsersRecentlyPlayedTracksResponse = await spotify.getMyRecentlyPlayedTracks({ limit: limit });
+    const data = await spotify.getMyRecentlyPlayedTracks({ limit: limit });
     return data;
   } catch (error) {
     console.error('Error fetching recently played tracks:', error);
@@ -838,8 +1572,13 @@ export const removeFromQueue = async (uri: string) => {
     const queueData = await queueResponse.json();
     const currentQueue = queueData.queue || [];
     
+    interface QueueTrack {
+      uri: string;
+      [key: string]: unknown;
+    }
+    
     // Find the track to remove
-    const trackIndex = currentQueue.findIndex((track: any) => track.uri === uri);
+    const trackIndex = currentQueue.findIndex((track: QueueTrack) => track.uri === uri);
     
     if (trackIndex === -1) {
       throw new Error('Track not found in queue');
@@ -1011,171 +1750,200 @@ export const getAudioAnalysis = async (trackId: string) => {
     const analysis = await spotify.getAudioAnalysisForTrack(trackId);
     return analysis;
   } catch (error) {
-    console.error('Error fetching audio analysis:', error);
-    throw error;
+    // If the API returns 403 Forbidden, it likely means the current token
+    // doesn't have the necessary scope for audio analysis — return null so
+    // callers can fall back to defaults instead of erroring the whole UI.
+    const maybeErr = error as unknown;
+    if (maybeErr && typeof maybeErr === 'object' && 'status' in (maybeErr as Record<string, unknown>) && typeof (maybeErr as Record<string, unknown>).status === 'number' && (maybeErr as Record<string, number>).status === 403) {
+      logOnce(`[getAudioAnalysis-${trackId}]`, 'warn', '[getAudioAnalysis] 403 Forbidden — insufficient scope or permissions for audio analysis');
+      return null;
+    }
+    logOnce(`[getAudioAnalysis-${trackId}-error]`, 'error', 'Error fetching audio analysis:', error);
+    return null;
   }
 };
 
-// Helper function to provide default audio data
-const getDefaultAudioData = () => ({
-  beats: [],
-  bars: [],
-  tatums: [],
-  sections: [],
-  segments: []
-});
+const sessionGenreCache = new Map<string, string[]>();
 
-// Helper function to provide default audio analysis
-const getDefaultAnalysis = () => ({
-  track: {
-    duration: 0,
-    start_of_fade_out: 0,
-    end_of_fade_in: 0,
-    loudness: 0,
-    tempo: 0,
-    tempo_confidence: 0,
-    time_signature: 0,
-    time_signature_confidence: 0,
-    key: 0,
-    key_confidence: 0,
-    mode: 0,
-    mode_confidence: 0
-  },
-  bars: [],
-  beats: [],
-  sections: [],
-  segments: [],
-  tatums: []
-});
+// Cache for related artists lookups to avoid repeated 404 spam
+// - Stores not_found/error states with a TTL to prevent tight retry loops
+const relatedArtistsCache = new Map<string, { status: 'ok' | 'not_found' | 'error'; lastChecked: number; artists?: Array<{ id: string }> }>();
+const RELATED_ARTISTS_TTL_OK = 10 * 60 * 1000; // 10 minutes
+const RELATED_ARTISTS_TTL_NF = 60 * 60 * 1000; // 1 hour for 404s
+const RELATED_ARTISTS_TTL_ERR = 5 * 60 * 1000;  // 5 minutes for transient errors
 
-export const getTrackGenres = async (trackId: string): Promise<string[]> => {
-  if (!(await ensureValidToken())) {
-    console.warn('Token not valid for getTrackGenres.');
-    return [];
+async function fetchRelatedArtistsSafe(artistId: string): Promise<Array<{ id: string }>> {
+  const now = Date.now();
+  const cached = relatedArtistsCache.get(artistId);
+  if (cached) {
+    const ttl = cached.status === 'ok' ? RELATED_ARTISTS_TTL_OK : cached.status === 'not_found' ? RELATED_ARTISTS_TTL_NF : RELATED_ARTISTS_TTL_ERR;
+    if (now - cached.lastChecked < ttl) {
+      return cached.artists || [];
+    }
   }
-  
+
   try {
-    const track = await spotify.getTrack(trackId);
-    if (track && track.artists && track.artists.length > 0) {
-      const artistIds = track.artists.map((artist: SpotifyApi.ArtistObjectSimplified) => artist.id).filter(Boolean) as string[];
-      if (artistIds.length > 0) {
-        const spotifyGenres = await getGenresFromArtists(artistIds);
-        if (spotifyGenres.length > 0) {
-          return spotifyGenres;
-        }
+    const res = await rateLimitedFetch(`https://api.spotify.com/v1/artists/${artistId}/related-artists`, {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('spotify_token')}` }
+    });
+
+    if (res.status === 404) {
+      // Artist not found or related-artists not available; treat as empty and cache as not_found
+      if (shouldLog(`related-artists-404-${artistId}`, 60000)) {
+        console.warn('[fetchRelatedArtistsSafe] 404 for related artists:', artistId);
       }
+      relatedArtistsCache.set(artistId, { status: 'not_found', lastChecked: now, artists: [] });
+      return [];
     }
-    
-    // If Spotify genres failed, try backup sources
-    if (track && track.artists && track.artists.length > 0) {
-      const artistName = track.artists[0].name;
-      const trackName = track.name;
-      
-      try {
-        const { getCachedBackupGenres } = await import('./genreBackup');
-        const backupResult = await getCachedBackupGenres(trackName, artistName);
-        
-        if (backupResult.success && backupResult.genres.length > 0) {
-          console.log(`Using backup genres from ${backupResult.source} for ${trackName} by ${artistName}`);
-          return backupResult.genres;
-        }
-      } catch (backupError) {
-        console.error('Backup genre fetch failed:', backupError);
-      }
+
+    if (!res.ok) {
+      // Other errors (401/403/5xx) — log once, cache transient error, return empty
+      logOnce(`related-artists-${artistId}-status-${res.status}`, 'warn', '[fetchRelatedArtistsSafe] Failed to fetch related artists:', artistId, res.status);
+      relatedArtistsCache.set(artistId, { status: 'error', lastChecked: now, artists: [] });
+      return [];
     }
-    
-    // Final fallback to default genres
-    return getDefaultGenresByArtistName(track.artists.map((a: SpotifyApi.ArtistObjectSimplified) => a.name));
-  } catch (error) {
-    console.error('Error getting track genres:', error);
-    
-    // Try backup sources even if Spotify track fetch fails
-    try {
-      // We need track info for backup, so try to get it from current playback
-      const currentTrack = await getCurrentTrack();
-      if (currentTrack?.item) {
-        const artistName = currentTrack.item.artists[0]?.name;
-        const trackName = currentTrack.item.name;
-        
-        if (artistName && trackName) {
-          const { getCachedBackupGenres } = await import('./genreBackup');
-          const backupResult = await getCachedBackupGenres(trackName, artistName);
-          
-          if (backupResult.success && backupResult.genres.length > 0) {
-            console.log(`Using backup genres from ${backupResult.source} for ${trackName} by ${artistName}`);
-            return backupResult.genres;
-          }
-        }
-      }
-    } catch (backupError) {
-      console.error('Backup genre fetch failed:', backupError);
-    }
-    
-    // Final fallback to empty array
+
+    const data = await res.json().catch(() => ({ artists: [] }));
+    const artists = Array.isArray(data?.artists) ? data.artists.map((a: any) => ({ id: a?.id })).filter((a: any) => a && a.id) : [];
+    relatedArtistsCache.set(artistId, { status: 'ok', lastChecked: now, artists });
+    return artists;
+  } catch (e) {
+    logOnce(`related-artists-${artistId}-error`, 'warn', '[fetchRelatedArtistsSafe] Error:', e);
+    relatedArtistsCache.set(artistId, { status: 'error', lastChecked: now, artists: [] });
     return [];
   }
-};
-
-// Utility to get genres from artists, with caching and fallback
-async function getGenresFromArtists(artistIds: string[]): Promise<string[]> {
-  const allGenres = new Set<string>();
-  const token = await ensureValidToken();
-  if (!token) return [];
-
-  // Fetch artist details in batches to get genres
-  const batchSize = 50; // Spotify API allows up to 50 artists per request
-  for (let i = 0; i < artistIds.length; i += batchSize) {
-    const batch = artistIds.slice(i, i + batchSize);
-    try {
-      const response = await queueRequest(() => spotify.getArtists(batch));
-      if (response && (response as SpotifyApi.MultipleArtistsResponse).artists) {
-        (response as SpotifyApi.MultipleArtistsResponse).artists.forEach((artist: SpotifyApi.ArtistObjectFull) => {
-          if (artist && artist.genres) {
-            artist.genres.forEach(genre => allGenres.add(genre));
-          }
-        });
-      }
-    } catch (error) {
-      console.error('Error fetching artist batch for genres:', error);
-    }
-  }
-  return Array.from(allGenres);
 }
 
-// Fallback for getting genres by artist name if Spotify API fails or no genres found
-function getDefaultGenresByArtistName(artistNames: string[]): string[] {
-  const genresMap: { [key: string]: string[] } = {
-    // A mapping of artist names (or keywords) to typical genres
-    // This is a simplified fallback and won't be comprehensive
-    'Pop': ['pop'],
-    'Rock': ['rock', 'alternative'],
-    'Hip Hop': ['hip-hop', 'rap'],
-    'Electronic': ['electronic', 'dance'],
-    'Jazz': ['jazz'],
-    'Classical': ['classical'],
-    'Country': ['country'],
-    'R&B': ['r-n-b', 'soul'],
-    'Blues': ['blues'],
-    'Folk': ['folk'],
-    'Reggae': ['reggae'],
-    'Metal': ['metal'],
-    'Indie': ['indie'],
-    'Alternative': ['alternative'],
-    'Dance': ['dance'],
-    'Soul': ['soul'],
-    'Disco': ['disco'],
-  };
 
-  const defaultGenres: string[] = [];
-  artistNames.forEach(name => {
-    for (const keyword in genresMap) {
-      if (name.toLowerCase().includes(keyword.toLowerCase())) {
-        defaultGenres.push(...genresMap[keyword]);
-        break;
+// Recursively get genres for all artists and their related artists (up to 2 levels deep)
+async function getAllArtistsGenres(artistIds: string[], depth = 0, maxDepth = 2, seen = new Set<string>()): Promise<string[]> {
+  if (depth > maxDepth) return [];
+  const genres: string[] = [];
+  for (const artistId of artistIds) {
+    if (seen.has(artistId)) continue;
+    seen.add(artistId);
+    try {
+        const artist = await spotify.getArtist(artistId);
+      if (artist && artist.genres && artist.genres.length > 0) {
+        genres.push(...artist.genres);
       }
+      // Recursively get related artists
+      if (depth < maxDepth) {
+        // Use safe fetch to avoid throwing/log spamming on 404s and cache failures
+        const related = await fetchRelatedArtistsSafe(artistId);
+        if (Array.isArray(related) && related.length > 0) {
+          const relatedIds = related.map((a: { id: string }) => a.id).filter(Boolean);
+          const relatedGenres = await getAllArtistsGenres(relatedIds, depth + 1, maxDepth, seen);
+          genres.push(...relatedGenres);
+        }
+      }
+    } catch (e) {
+      // Ignore errors for individual artists but avoid noisy logs
+      const key = `artist-${artistId}-error`;
+      logOnce(key, 'warn', `[getAllArtistsGenres] Error for artist ${artistId}:`, e);
     }
-  });
-  return [...new Set(defaultGenres)]; // Return unique genres
+  }
+  return Array.from(new Set(genres));
+}
+
+// Main genre function using Vexcited/better-spotify-genres logic, fallback to backup
+export const getTrackGenres = async (trackId: string): Promise<string[]> => {
+  if (sessionGenreCache.has(trackId)) {
+    return sessionGenreCache.get(trackId)!;
+  }
+  if (!(await ensureValidToken())) {
+    return [];
+  }
+  try {
+    const track = await spotify.getTrack(trackId);
+    if (!track || !track.artists) {
+      return [];
+    }
+    const artistIds = track.artists.map((a: { id: string }) => a.id).filter(Boolean);
+    // Try all artists and their related artists (recursively)
+    const genres = await getAllArtistsGenres(artistIds);
+    if (genres.length > 0) {
+      sessionGenreCache.set(trackId, genres);
+      return genres.slice(0, 5);
+    }
+    // Fallback: use backup genre logic (MusicBrainz, Last.fm, etc.)
+    try {
+      const { getBackupGenres } = await import('./genreBackup');
+      const result = await getBackupGenres(track.name, track.artists[0].name);
+      if (result.success && result.genres.length > 0) {
+        sessionGenreCache.set(trackId, result.genres);
+        return result.genres.slice(0, 5);
+      }
+    } catch {
+      // Ignore backup errors
+    }
+    sessionGenreCache.set(trackId, []);
+    return [];
+  } catch {
+    return [];
+  }
+};
+
+if (!spotify.getArtist) {
+  spotify.getArtist = async function(artistId: string) {
+    console.debug('[spotify.getArtist] Fetching artist:', artistId);
+    try {
+      const res = await rateLimitedFetch(`https://api.spotify.com/v1/artists/${artistId}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('spotify_token')}` }
+      });
+      if (!res.ok) {
+        console.warn('[spotify.getArtist] Failed to fetch artist:', artistId, res.status);
+        return null;
+      }
+      const data = await res.json();
+      console.debug('[spotify.getArtist] Artist data:', data);
+      return data;
+    } catch (e) {
+      console.error('[spotify.getArtist] Error:', e);
+      return null;
+    }
+  };
+}
+if (!spotify.getArtistRelatedArtists) {
+  spotify.getArtistRelatedArtists = async function(artistId: string) {
+    console.debug('[spotify.getArtistRelatedArtists] Fetching related artists for:', artistId);
+    try {
+      const res = await rateLimitedFetch(`https://api.spotify.com/v1/artists/${artistId}/related-artists`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('spotify_token')}` }
+      });
+      if (!res.ok) {
+        console.warn('[spotify.getArtistRelatedArtists] Failed to fetch related artists:', artistId, res.status);
+        return [];
+      }
+      const data = await res.json();
+      console.debug('[spotify.getArtistRelatedArtists] Related artists data:', data);
+      return data.artists || [];
+    } catch (e) {
+      console.error('[spotify.getArtistRelatedArtists] Error:', e);
+      return [];
+    }
+  };
+}
+// Polyfill for spotify.getTrack (needed for genre fetching)
+if (!spotify.getTrack) {
+  spotify.getTrack = async function(trackId: string) {
+    console.debug('[spotify.getTrack] Fetching track:', trackId);
+    try {
+      const res = await rateLimitedFetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('spotify_token')}` }
+      });
+      if (!res.ok) {
+        console.warn('[spotify.getTrack] Failed to fetch track:', trackId, res.status);
+        return null;
+      }
+      const data = await res.json();
+      console.debug('[spotify.getTrack] Track data:', data);
+      return data;
+    } catch (e) {
+      console.error('[spotify.getTrack] Error:', e);
+      return null;
+    }
+  };
 }
 
 // Rate limiting and request queuing
@@ -1198,15 +1966,15 @@ async function processRequestQueue() {
       const result = await requestFn();
       consecutiveFailures = 0; // Reset on success
       return result;
-    } catch (error: any) {
-      console.error('Request failed:', error);
+    } catch (error) {
+      console.error('Request failed:', error instanceof Error ? error.message : 'Unknown error');
       consecutiveFailures++;
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         console.warn('Max consecutive failures reached. Cooling down...');
         await new Promise(resolve => setTimeout(resolve, COOL_DOWN_PERIOD));
         consecutiveFailures = 0; // Reset after cool down
       }
-      throw error; // Re-throw the error to be caught by the original caller
+      throw error instanceof Error ? error : new Error('Unknown error in request queue'); // Re-throw the error to be caught by the original caller
     } finally {
       lastRequestTime = Date.now();
       isProcessingQueue = false;
@@ -1230,48 +1998,6 @@ function queueRequest<T>(requestFn: () => Promise<T>): Promise<T> {
         requestQueue.push(wrappedRequest);
         processRequestQueue();
     });
-}
-
-async function fetchWithRetry(
-  url: string, 
-  options: RequestInit, 
-  maxRetries = 5, 
-  initialDelayMs = 2000
-): Promise<Response> {
-  let retries = 0;
-  let delay = initialDelayMs;
-
-  while (retries < maxRetries) {
-    try {
-      const response = await fetch(url, options);
-      if (response.ok) {
-        return response;
-      } else if (response.status === 429) { // Rate limit exceeded
-        const retryAfter = response.headers.get('Retry-After');
-        const retryDelay = retryAfter ? parseInt(retryAfter) * 1000 : delay; // Use Retry-After header if available
-        console.warn(`Rate limit exceeded. Retrying after ${retryDelay / 1000} seconds.`);
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
-        delay *= 2; // Exponential backoff
-      } else if (response.status >= 500) { // Server error
-        console.warn(`Server error ${response.status}. Retrying in ${delay / 1000} seconds.`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        delay *= 2; // Exponential backoff
-      } else {
-        // For other client errors (4xx), don't retry
-        throw new Error(`API error: ${response.status} - ${response.statusText}`);
-      }
-    } catch (error: any) {
-      console.error('Fetch error:', error);
-      if (error.message.startsWith('API error')) {
-        throw error; // Don't retry for specific API errors
-      }
-      console.warn(`Network error. Retrying in ${delay / 1000} seconds.`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      delay *= 2; // Exponential backoff
-    }
-    retries++;
-  }
-  throw new Error(`Failed to fetch ${url} after ${maxRetries} retries.`);
 }
 
 export const playTrack = async (
@@ -1416,10 +2142,17 @@ export const checkUserFollowsPlaylists = async (playlistId: string, userId: stri
 };
 
 export const signOut = () => {
+  // Clear all auth-related data from localStorage
   localStorage.removeItem('spotify_token');
   localStorage.removeItem('spotify_token_expires_at');
+  localStorage.removeItem('spotify_refresh_token');
   localStorage.removeItem('spotify_user');
-  window.location.href = SPOTIFY_AUTH_URL; // Redirect to login page
+  
+  // Clear any scheduled token refreshes
+  clearTokenRefreshSchedule();
+  
+  // Redirect to login page
+  window.location.href = SPOTIFY_AUTH_URL;
 };
 
 export const searchTracks = async (query: string, limit = 10) => {
@@ -1435,9 +2168,12 @@ export const searchTracks = async (query: string, limit = 10) => {
     });
 
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        refreshToken();
+        throw new Error('Token expired or forbidden');
+      }
       throw new Error(`Failed to search tracks: ${response.status}`);
     }
-
     const data = await response.json();
     return data.tracks?.items || [];
   } catch (error) {

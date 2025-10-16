@@ -8,8 +8,16 @@ export const useColorThief = (imageRef: React.RefObject<HTMLImageElement>) => {
     if (!imageRef.current || !colorThiefRef.current) return null;
     
     try {
-      return colorThiefRef.current.getColor(imageRef.current);
+      // Ensure image has loaded and has dimensions
+      const img = imageRef.current as HTMLImageElement;
+      if (!img.naturalWidth || !img.naturalHeight) return null;
+      return colorThiefRef.current.getColor(img);
     } catch (error) {
+      // SecurityError indicates cross-origin image without CORS — treat as no color
+      if (error instanceof Error && error.name === 'SecurityError') {
+        console.debug('Cross-origin image blocked color extraction');
+        return null;
+      }
       console.error('Error extracting color from image:', error);
       return null;
     }
