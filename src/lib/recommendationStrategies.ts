@@ -225,6 +225,24 @@ async function fetchRecommendations(token: string, params: Record<string, string
             }));
         }
 
+        // 4. Force Global Fallback if still empty
+        if (candidates.size === 0) {
+            console.log('[fetchRecommendations] No candidates found locally. Using global fallback playlist.');
+            try {
+                const res = await fetch(`https://api.spotify.com/v1/playlists/37i9dQZEVXbMDoHDwVN2tF/tracks?limit=10`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    data.items?.forEach((item: any) => {
+                        if (item.track) candidates.set(item.track.id, item.track);
+                    });
+                }
+            } catch (e) {
+                console.error('[fetchRecommendations] Global fallback failed', e);
+            }
+        }
+
         let results = Array.from(candidates.values());
 
         // Shuffle
