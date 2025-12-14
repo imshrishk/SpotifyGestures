@@ -567,7 +567,6 @@ export const getMultiSlabRecommendations = async (): Promise<RecommendationSlab[
     const [recentTracksRes, topArtistsRes] = await Promise.all([
       spotify.getMyRecentlyPlayedTracks({ limit: 20 }).catch(_e => ({ items: [] as any[] })),
       spotify.getMyTopArtists({ limit: 10, time_range: 'short_term' }).catch(_e => ({ items: [] as any[] })),
-      // spotify.getMyTopTracks({ limit: 5, time_range: 'short_term' }).catch(_e => ({ items: [] as any[] }))
     ]);
 
     const recentTracks = recentTracksRes.items || [];
@@ -575,17 +574,33 @@ export const getMultiSlabRecommendations = async (): Promise<RecommendationSlab[
     const topArtistIds = topArtists.map((a: any) => a.id);
 
     // Infer genres from top artists
-    const topGenres = [...new Set(topArtists.flatMap((a: any) => a.genres || []))].slice(0, 5);
+    let topGenres = [...new Set(topArtists.flatMap((a: any) => a.genres || []))].slice(0, 5);
+
+    // Fallback: If no top genres (new user), use random popular genres
+    if (topGenres.length === 0) {
+      topGenres = ['pop', 'hip-hop', 'rock', 'electronic', 'indie'];
+    }
 
     console.log('[getMultiSlabRecommendations] Context retrieved. Generating slabs...');
 
-    const [moodSlab, discoverySlab, familiarSlab] = await Promise.all([
+    // Use Promise.allSettled so one failure doesn't break the whole page
+    const results = await Promise.allSettled([
       getMoodSlab(token, recentTracks),
       getDiscoverySlab(token, topGenres, topArtistIds),
       getFamiliarSlab(token, topArtistIds)
     ]);
 
-    return [moodSlab, discoverySlab, familiarSlab];
+    // Extract successful slabs
+    const slabs: RecommendationSlab[] = [];
+    results.forEach((result) => {
+      if (result.status === 'fulfilled') {
+        slabs.push(result.value);
+      } else {
+        console.error('[getMultiSlabRecommendations] Strategy failed:', result.reason);
+      }
+    });
+
+    return slabs;
 
   } catch (e) {
     console.error('[getMultiSlabRecommendations] Error:', e);

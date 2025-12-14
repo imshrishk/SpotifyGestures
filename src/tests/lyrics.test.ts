@@ -41,7 +41,7 @@ describe('Lyrics API', () => {
         text: () => Promise.resolve(`
           <html>
             <body>
-              <div data-lyrics-container="true">Test lyrics content</div>
+              <div data-lyrics-container="true">Test lyrics content that is definitely longer than fifty characters so it passes the length check in the function</div>
             </body>
           </html>
         `)
@@ -55,7 +55,7 @@ describe('Lyrics API', () => {
     });
 
     const result = await getLyrics('test-track-id');
-    expect(result.lyrics).toBe('Test lyrics content');
+    expect(result.lyrics).toBe('Test lyrics content that is definitely longer than fifty characters so it passes the length check in the function');
     expect(result.syncedLyrics).toBeNull();
   });
 
