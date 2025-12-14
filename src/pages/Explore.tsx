@@ -22,10 +22,13 @@ interface CurrentPlaybackState {
   [key: string]: any;
 }
 
+
+import { RecommendationSlab } from '../lib/recommendationStrategies';
+
 const Explore: React.FC = () => {
   const navigate = useNavigate();
   const { token, currentTrack } = useSpotifyStore();
-  const [slabs, setSlabs] = useState<any[]>([]); // Using any[] for now as RecommendationSlab type is not exported yet, will fix next
+  const [slabs, setSlabs] = useState<RecommendationSlab[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -104,8 +107,8 @@ const Explore: React.FC = () => {
         ) : (
           <div className="space-y-12">
             {slabs.length > 0 ? (
-              slabs.map((slab, index) => (
-                <div key={slab.id || index} className="space-y-4">
+              slabs.map((slab) => (
+                <div key={slab.type} className="space-y-4">
                   <div>
                     <h2 className="text-xl font-bold flex items-center gap-2">
                       {slab.label} <span className="text-xs font-normal text-gray-500 uppercase tracking-wider border border-gray-700 px-2 py-0.5 rounded">{slab.type}</span>
@@ -168,7 +171,7 @@ const Explore: React.FC = () => {
               ))
             ) : (
               <div className="text-center py-12">
-                <p className="text-gray-400 mb-4">No recommendations found.</p>
+                <p className="text-gray-400 mb-4">No recommendations found yet. Try playing some music!</p>
                 <div className="inline-block text-left bg-gray-900 p-4 rounded text-xs font-mono text-gray-500 mb-4">
                   <p>Debug Info:</p>
                   <p>Token: {token ? 'Present' : 'Missing'}</p>

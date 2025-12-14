@@ -22,7 +22,15 @@ export async function getMoodSlab(
         .slice(0, 5);
 
     if (distinctRecent.length === 0) {
-        return { type: 'mood', label: 'Mood Match', description: 'Play more music to unlock this!', tracks: [] };
+        // Fallback to "Happy / Energetic" default mood if no history
+        // Or return empty if we strictly want user-based. 
+        // Let's return a generic "Start your journey" mood slab.
+        return {
+            type: 'mood',
+            label: 'Mood Match',
+            description: 'Start listening to see your mood mix!',
+            tracks: []
+        };
     }
 
     const avgFeatures = await getAverageAudioFeatures(token, distinctRecent.map(t => t.id));
@@ -64,7 +72,8 @@ export async function getDiscoverySlab(
     topArtistIds: string[]
 ): Promise<RecommendationSlab> {
     if (seedGenres.length === 0) {
-        return { type: 'discovery', label: 'Deep Discovery', description: 'Explore new sounds', tracks: [] };
+        // Fallback genres
+        seedGenres = ['pop', 'rock', 'indie', 'hip-hop', 'electronic'];
     }
 
     // Pick 1 random genre from the seeds
@@ -100,7 +109,7 @@ export async function getFamiliarSlab(
     topArtistIds: string[]
 ): Promise<RecommendationSlab> {
     if (topArtistIds.length === 0) {
-        return { type: 'familiar', label: 'Familiar Favorites', description: 'Artists you might like', tracks: [] };
+        return { type: 'familiar', label: 'Familiar Favorites', description: 'Listen to more artists to see this!', tracks: [] };
     }
 
     // Shuffle and pick 2 artists

@@ -600,6 +600,21 @@ export const getMultiSlabRecommendations = async (): Promise<RecommendationSlab[
       }
     });
 
+    // If no slabs at all (e.g. all rejected), return a fallback
+    if (slabs.length === 0) {
+      console.warn('[getMultiSlabRecommendations] All strategies failed or returned empty. Using emergency fallback.');
+      try {
+        const fallback = await getDiscoverySlab(token, ['pop', 'dance', 'hits'], []);
+        if (fallback.tracks.length > 0) {
+          fallback.label = 'Popular Right Now';
+          fallback.description = 'Fresh hits for you';
+          slabs.push(fallback);
+        }
+      } catch (e) {
+        console.error('Emergency fallback failed', e);
+      }
+    }
+
     return slabs;
 
   } catch (e) {
