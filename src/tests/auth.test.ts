@@ -3,16 +3,31 @@ import { setAccessToken, refreshToken, ensureValidToken, SPOTIFY_AUTH_URL } from
 import { generateCodeChallenge, generateCodeVerifier } from '../lib/authCreds';
 
 vi.mock('spotify-web-api-js');
+vi.mock('../lib/tokenRefresh', () => ({
+  scheduleTokenRefresh: vi.fn(),
+  clearTokenRefreshSchedule: vi.fn(),
+  initializeTokenRefresh: vi.fn()
+}));
 
 describe('Auth Functions', () => {
+  let originalLocation: Location;
+
   beforeEach(() => {
     localStorage.setItem('spotify_token', 'test-token');
     localStorage.setItem('spotify_refresh_token', 'test-refresh-token');
+    // Save original location
+    originalLocation = window.location;
+    // Mock location with a writable object
+    delete (window as any).location;
+    (window as any).location = { href: '' };
   });
 
   afterEach(() => {
+    // Restore original location
+    (window as any).location = originalLocation;
     localStorage.clear();
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it('should generate valid PKCE code verifier', () => {
@@ -76,30 +91,28 @@ describe('Auth Functions', () => {
   });
 
   it('should handle refresh token errors gracefully', async () => {
+    vi.useFakeTimers();
+
     // Mock fetch to simulate error
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 400,
-      statusText: 'Bad Request'
+      statusText: 'Bad Request',
+      json: () => Promise.resolve({})
     });
 
-    // Mock window.location for redirect using vi.spyOn
-    const locationSpy = vi.spyOn(window, 'location', 'get').mockReturnValue({
-      ...window.location,
-      href: ''
-    } as Location);
-
     // Run refresh with invalid refresh token
-    await refreshToken();
+    const refreshPromise = refreshToken();
+
+    await vi.runAllTimersAsync();
+    await refreshPromise;
 
     // Should redirect to auth URL on refresh failure
     expect(window.location.href).toBe(SPOTIFY_AUTH_URL);
-
-    // Restore window.location
-    locationSpy.mockRestore();
   });
 
   it('should validate tokens correctly', async () => {
+    vi.useFakeTimers();
     // Set up valid token
     const token = 'test-token';
     const expiresIn = 3600;
@@ -124,36 +137,34 @@ describe('Auth Functions', () => {
     localStorage.setItem('spotify_token_expires_at', (Date.now() - 1000).toString());
 
     // Should attempt refresh with valid refresh token
-    result = await ensureValidToken();
+    const refreshPromise1 = ensureValidToken();
+    await vi.runAllTimersAsync();
+    result = await refreshPromise1;
     expect(result).toBe('new-access-token');
 
     // Mock fetch for refresh token failure
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 400,
-      statusText: 'Bad Request'
+      statusText: 'Bad Request',
+      json: () => Promise.resolve({})
     });
-
-    // Mock window.location for the expired token test using vi.spyOn
-    const locationSpy = vi.spyOn(window, 'location', 'get').mockReturnValue({
-      ...window.location,
-      href: ''
-    } as Location);
 
     // Clear refresh token and set expired token
     localStorage.removeItem('spotify_refresh_token');
     localStorage.setItem('spotify_token_expires_at', (Date.now() - 1000).toString());
 
     // Should redirect to auth URL when token is expired and no refresh token
-    result = await ensureValidToken();
+    const refreshPromise2 = ensureValidToken();
+    await vi.runAllTimersAsync();
+    result = await refreshPromise2;
     expect(result).toBeNull();
     expect(window.location.href).toBe(SPOTIFY_AUTH_URL);
-
-    // Restore window.location
-    locationSpy.mockRestore();
   });
 
   it('should retry failed token refresh attempts', async () => {
+    vi.useFakeTimers();
+
     // Mock fetch to fail twice then succeed
     global.fetch = vi.fn()
       .mockResolvedValueOnce({
@@ -179,7 +190,12 @@ describe('Auth Functions', () => {
     setAccessToken('old-token', -1000, 'test-refresh-token');
 
     // Should eventually succeed after retries
-    const result = await ensureValidToken();
+    const tokenPromise = ensureValidToken();
+
+    // Fast forward enough time for backoff (1s + 2s + ...)
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const result = await tokenPromise;
     expect(result).toBe('new-access-token');
     expect(fetch).toHaveBeenCalledTimes(3);
   });

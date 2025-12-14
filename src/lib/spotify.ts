@@ -5,7 +5,7 @@ import { smartRequest, getConnectionPoolStats } from './connectionPool';
 import * as Cache from './cache';
 import { checkRateLimit, getRateLimitStats } from './rateLimiter';
 
-const spotify = new SpotifyWebApi();
+export const spotify = new SpotifyWebApi();
 const clientId = authCreds.client_id;
 const redirectUri = authCreds.redirect_uri;
 export interface PlaybackState {
