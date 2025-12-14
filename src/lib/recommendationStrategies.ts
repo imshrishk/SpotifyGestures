@@ -22,14 +22,19 @@ export async function getMoodSlab(
         .slice(0, 5);
 
     if (distinctRecent.length === 0) {
-        // Fallback to "Happy / Energetic" default mood if no history
-        // Or return empty if we strictly want user-based. 
-        // Let's return a generic "Start your journey" mood slab.
+        // Fallback: Fetch some generic "happy" tracks for new users
+        const fallbackTracks = await fetchRecommendations(token, {
+            seed_genres: 'pop',
+            min_energy: 0.6,
+            min_valence: 0.6,
+            limit: 10
+        });
+
         return {
             type: 'mood',
             label: 'Mood Match',
-            description: 'Start listening to see your mood mix!',
-            tracks: []
+            description: 'Start your journey with some upbeat vibes!',
+            tracks: fallbackTracks
         };
     }
 
@@ -72,8 +77,9 @@ export async function getDiscoverySlab(
     topArtistIds: string[]
 ): Promise<RecommendationSlab> {
     if (seedGenres.length === 0) {
-        // Fallback genres
-        seedGenres = ['pop', 'rock', 'indie', 'hip-hop', 'electronic'];
+        // Fallback: Use popular genres
+        // We reassign seedGenres so the code below executes normally
+        seedGenres = ['pop', 'dance', 'rock', 'hip-hop'];
     }
 
     // Pick 1 random genre from the seeds
@@ -109,7 +115,18 @@ export async function getFamiliarSlab(
     topArtistIds: string[]
 ): Promise<RecommendationSlab> {
     if (topArtistIds.length === 0) {
-        return { type: 'familiar', label: 'Familiar Favorites', description: 'Listen to more artists to see this!', tracks: [] };
+        // Fallback: Fetch popular tracks if no top artists
+        const fallbackTracks = await fetchRecommendations(token, {
+            seed_genres: 'pop',
+            min_popularity: 70,
+            limit: 10
+        });
+        return {
+            type: 'familiar',
+            label: 'Popular Favorites',
+            description: 'Trending tracks to get you started',
+            tracks: fallbackTracks
+        };
     }
 
     // Shuffle and pick 2 artists

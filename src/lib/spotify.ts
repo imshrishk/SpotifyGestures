@@ -594,7 +594,10 @@ export const getMultiSlabRecommendations = async (): Promise<RecommendationSlab[
     const slabs: RecommendationSlab[] = [];
     results.forEach((result) => {
       if (result.status === 'fulfilled') {
-        slabs.push(result.value);
+        // Only include slabs that actually have tracks
+        if (result.value.tracks && result.value.tracks.length > 0) {
+          slabs.push(result.value);
+        }
       } else {
         console.error('[getMultiSlabRecommendations] Strategy failed:', result.reason);
       }
@@ -624,16 +627,40 @@ export const getMultiSlabRecommendations = async (): Promise<RecommendationSlab[
 };
 
 // Deprecated: kept for backward compatibility if needed, but redirects to mood strategy or user profile
+// Restoration of proper parametric recommendations
 export const getRecommendations = async (
-  _seedTracks: string[] = [],
-  _seedArtists: string[] = [],
-  _seedGenres: string[] = []
+  seedTracks: string[] = [],
+  seedArtists: string[] = [],
+  seedGenres: string[] = []
 ) => {
-  // Legacy fallback wrapper
-  const slabs = await getMultiSlabRecommendations();
-  // Return combined tracks or just the mood slab
-  const all = slabs.flatMap(s => s.tracks);
-  return { tracks: all };
+  const token = await ensureValidToken();
+  if (!token) return { tracks: [] };
+
+  try {
+    const params = new URLSearchParams();
+    if (seedTracks.length) params.append('seed_tracks', seedTracks.join(','));
+    if (seedArtists.length) params.append('seed_artists', seedArtists.join(','));
+    if (seedGenres.length) params.append('seed_genres', seedGenres.join(','));
+
+    // Defaults for better results
+    params.append('limit', '20');
+    params.append('min_popularity', '20');
+
+    const res = await fetch(`https://api.spotify.com/v1/recommendations?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (!res.ok) {
+      console.error('[getRecommendations] API Error', res.status, await res.text());
+      return { tracks: [] };
+    }
+
+    const data = await res.json();
+    return data;
+  } catch (e) {
+    console.error('[getRecommendations] Failed:', e);
+    return { tracks: [] };
+  }
 };
 
 // Build simple local recommendations using artists' top tracks and genre search

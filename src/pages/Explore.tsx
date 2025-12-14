@@ -4,6 +4,7 @@ import { ArrowLeft, Music, Play, Pause } from 'lucide-react';
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { playTrack, pauseTrack } from '../lib/spotify';
 import { motion } from 'framer-motion';
+import ExploreRecommendations from '../components/ExploreRecommendations';
 
 
 
@@ -189,6 +190,9 @@ const Explore: React.FC = () => {
             )}
           </div>
         )}
+
+        {/* Manual Recommendations Lab */}
+        <ExploreRecommendations />
       </div>
     </div>
   );
