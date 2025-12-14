@@ -26,7 +26,7 @@ export function generateCodeVerifier(length = 128): string {
 
 export const authCreds = {
     client_id: import.meta.env.VITE_SPOTIFY_CLIENT_ID,
-    redirect_uri: import.meta.env.VITE_REDIRECT_URI || 'http://localhost:5173/callback',
+    redirect_uri: import.meta.env.VITE_REDIRECT_URI || 'http://127.0.0.1:5173/callback',
     auth_endpoint: import.meta.env.VITE_SPOTIFY_AUTH_ENDPOINT || 'https://accounts.spotify.com/authorize',
     token_endpoint: import.meta.env.VITE_SPOTIFY_TOKEN_ENDPOINT || 'https://accounts.spotify.com/api/token',
     response_type: 'code',
@@ -58,6 +58,6 @@ try {
         console.error('[authCreds] Missing VITE_SPOTIFY_CLIENT_ID. Ensure .env.local is loaded and server restarted.');
     }
     if (!authCreds.redirect_uri) {
-        console.error('[authCreds] Missing VITE_REDIRECT_URI. Set it in .env.local (e.g., http://localhost:5173/callback)');
+        console.error('[authCreds] Missing VITE_REDIRECT_URI. Set it in .env.local (e.g., http://127.0.0.1:5173/callback)');
     }
-} catch {}
+} catch { }

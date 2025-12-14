@@ -69,6 +69,7 @@ const LyricsDisplay: React.FC = () => {
                 inline: 'nearest'
               });
             } catch {
+              // ignore scroll errors in test environment
             }
           } else if (lyricsContainerRef.current) {
             lyricsContainerRef.current.scrollTop = Math.max(0, (activeElement as HTMLElement).offsetTop - (lyricsContainerRef.current.clientHeight / 2));

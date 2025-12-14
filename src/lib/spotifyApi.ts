@@ -11,11 +11,11 @@ export class SpotifyApi {
         'Authorization': `Bearer ${token}`
       }
     });
-    
+
     if (response.status === 204) {
       return null; // No active playback
     }
-    
+
     return response.json();
   }
 
@@ -70,7 +70,7 @@ export class SpotifyApi {
         'Authorization': `Bearer ${token}`
       }
     });
-    
+
     return response.json();
   }
 
@@ -114,16 +114,16 @@ export class SpotifyApi {
     let allTracks: any[] = [];
     let nextUrl = `${SPOTIFY_API_BASE}/playlists/${playlistId}/tracks?limit=100`;
     let pageCount = 0;
-    
+
     try {
       while (nextUrl) {
         pageCount++;
         console.log(`Fetching playlist tracks page ${pageCount}: ${nextUrl}`);
-        
+
         const response = await axios.get(nextUrl, {
           headers: { Authorization: `Bearer ${token}` }
         });
-        
+
         // Add current page of tracks to our collection
         if (response.data.items && response.data.items.length > 0) {
           console.log(`Got ${response.data.items.length} tracks from page ${pageCount}`);
@@ -131,13 +131,13 @@ export class SpotifyApi {
         } else {
           console.log(`No tracks found on page ${pageCount}`);
         }
-        
+
         // Check if there's another page of results
         nextUrl = response.data.next;
       }
-      
+
       console.log(`Finished fetching ${allTracks.length} total tracks for playlist ${playlistId}`);
-      
+
       // Return data structure that matches what components expect
       return {
         items: allTracks,
@@ -151,7 +151,7 @@ export class SpotifyApi {
 
   static async playContext(token: string, contextUri: string, offset: number = 0) {
     console.log(`Playing context with URI: ${contextUri}, offset position: ${offset}`);
-    
+
     try {
       // Device activation logic
       const deviceResponse = await fetch(`${this.baseUrl}/me/player/devices`, {
@@ -159,7 +159,7 @@ export class SpotifyApi {
           'Authorization': `Bearer ${token}`
         }
       });
-      
+
       if (!deviceResponse.ok) {
         console.error("Failed to fetch devices:", deviceResponse.status, await deviceResponse.text());
         // Potentially throw an error here or attempt to play without a device ID
@@ -173,7 +173,7 @@ export class SpotifyApi {
         console.log('No active Spotify device found. Attempting to activate the first available device.');
         const firstDevice = deviceData.devices[0];
         deviceIdToUse = firstDevice.id;
-        
+
         try {
           const transferResponse = await fetch(`${this.baseUrl}/me/player`, {
             method: 'PUT',
@@ -187,7 +187,7 @@ export class SpotifyApi {
           if (!transferResponse.ok) {
             console.error("Failed to transfer playback to device:", transferResponse.status, await transferResponse.text());
             // If transfer fails, clear deviceIdToUse so we don't try to use a device that couldn't be activated
-            deviceIdToUse = undefined; 
+            deviceIdToUse = undefined;
           } else {
             // Wait a moment for transfer to complete
             console.log(`Transferring playback to ${firstDevice.name}, please wait...`);
@@ -204,26 +204,26 @@ export class SpotifyApi {
       } else if (activeDevice) {
         console.log(`Using active device: ${activeDevice.name}`);
       }
-      
+
       const requestBody: any = {
         context_uri: contextUri,
       };
-      
+
       // Spotify API: offset is an object { "position": number } or { "uri": string }
       // If offset is 0 or more, set it. If undefined or negative, Spotify defaults to start.
       if (typeof offset === 'number' && offset >= 0) {
         requestBody.offset = { position: offset };
       }
-      
+
       if (deviceIdToUse) {
         requestBody.device_id = deviceIdToUse;
         console.log('Attempting to play on device_id:', deviceIdToUse);
       } else {
         console.log('No specific device ID to use. Spotify will attempt to play on the default/active device if any.');
       }
-      
+
       console.log('Play context request body:', JSON.stringify(requestBody));
-      
+
       const response = await fetch(`${this.baseUrl}/me/player/play`, {
         method: 'PUT',
         headers: {
@@ -232,14 +232,14 @@ export class SpotifyApi {
         },
         body: JSON.stringify(requestBody)
       });
-      
+
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`Failed to play context: ${response.status}`, errorText);
-        
+
         // Try an alternative approach
         console.log('Trying alternative play context method...');
-        
+
         // Extract the playlist ID from the URI
         const playlistId = contextUri.split(':').pop();
         if (playlistId) {
@@ -249,23 +249,23 @@ export class SpotifyApi {
               'Authorization': `Bearer ${token}`
             }
           });
-          
+
           if (tracksResponse.ok) {
             const tracksData = await tracksResponse.json();
-            
+
             if (tracksData.items && tracksData.items.length > 0) {
               console.log(`Retrieved ${tracksData.items.length} tracks from playlist`);
-              
+
               // Get the URIs for the next few tracks starting from our offset
               const startIndex = Math.min(offset, tracksData.items.length - 1);
               const trackUris = tracksData.items
                 .slice(startIndex, startIndex + 10) // Get next 10 tracks
                 .filter((item: any) => item.track && item.track.uri)
                 .map((item: any) => item.track.uri);
-              
+
               if (trackUris.length > 0) {
                 console.log(`Playing ${trackUris.length} tracks from position ${startIndex}`);
-                
+
                 // Play the tracks in sequence
                 await fetch(`${this.baseUrl}/me/player/play`, {
                   method: 'PUT',
@@ -415,7 +415,7 @@ export class SpotifyApi {
     return response.data;
   }
 
-  static async getLyrics(token: string, trackId: string) {
+  static async getLyrics(_token: string, _trackId: string) {
     // Note: This is a mock implementation since Spotify's lyrics API is not publicly available
     // In a real implementation, you would need to use a third-party lyrics service
     return {
@@ -425,5 +425,14 @@ export class SpotifyApi {
         { text: "Sample lyrics line 3", time: 6000 }
       ]
     };
+  }
+
+  static async getAudioFeaturesForTracks(token: string, ids: string[]) {
+    if (!ids.length) return null;
+    const response = await fetch(`${this.baseUrl}/audio-features?ids=${ids.join(',')}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!response.ok) return null;
+    return response.json();
   }
 } 

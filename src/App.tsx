@@ -1,10 +1,12 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { Analytics } from '@vercel/analytics/react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import useSpotifyStore from './stores/useSpotifyStore';
-import Login from './pages/Login';
+
 import AuthOrPlayer from './components/AuthOrPlayer';
 import Callback from './pages/Callback';
-import Player from './pages/Player';
+
 import Profile from './pages/Profile';
 import Explore from './pages/Explore';
 import TrackPage from './pages/TrackPage';
@@ -35,6 +37,8 @@ function App() {
         <Route path="/followers" element={<Followers />} />
         <Route path="/friends" element={<Friends />} />
       </Routes>
+      <Analytics />
+      <SpeedInsights />
     </BrowserRouter>
   );
 }

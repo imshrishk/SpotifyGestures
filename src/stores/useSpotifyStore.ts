@@ -188,29 +188,28 @@ export const useSpotifyStore = create<SpotifyState>()(
         initializeSocket: () => {
           // Only try to connect if SOCKET_URL is set and not empty
           if (!SOCKET_URL) {
-            console.log('Socket URL not set, skipping socket connection (this is normal).');
+            console.warn('Socket URL not set, skipping socket connection.');
             return;
           }
           try {
             const socket = io(SOCKET_URL, {
               timeout: 5000,
               forceNew: true,
-              reconnection: false, // Disable auto-reconnection to reduce noise
             });
             console.debug('[useSpotifyStore] initializing socket to', SOCKET_URL);
             socket.on('connect', () => {
               console.log('Socket connected successfully');
             });
             socket.on('connect_error', (error) => {
-              console.log('Socket connection failed (this is normal if socket server is not running):', error.message);
-              // Don't set socket to null, just log the error
+              console.warn('Socket connection failed:', error.message);
+              // Optionally, set error state or disable socket features
             });
             socket.on('player-state-update', (state) => {
               set(state);
             });
             set({ socket });
           } catch (error) {
-            console.log('Failed to initialize socket (this is normal if socket server is not running):', error);
+            console.warn('Failed to initialize socket:', error);
             // Continue without socket connection
           }
         },
@@ -220,16 +219,16 @@ export const useSpotifyStore = create<SpotifyState>()(
           } catch (error) {
             console.warn('Error disconnecting socket:', error);
           }
-          // Clear only Spotify-related localStorage items, preserve PKCE verifier
+          // Clear all localStorage items to ensure no stale keys remain
           try {
+            localStorage.clear();
+          } catch {
+            // Fallback to removing known keys if clear is not available
             localStorage.removeItem('spotify-storage');
             localStorage.removeItem('spotify_token');
             localStorage.removeItem('spotify_token_expires_at');
             localStorage.removeItem('spotify_refresh_token');
             localStorage.removeItem('spotify_user');
-          } catch {
-            // Fallback to removing known keys if removeItem is not available
-            console.warn('Failed to clear Spotify localStorage items');
           }
           set({
             token: null,

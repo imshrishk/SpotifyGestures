@@ -2,7 +2,24 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Music, ArrowRight, Sparkles } from 'lucide-react';
 
-import { buildPkceAuthUrl } from '../lib/spotify';
+import { authCreds, generateCodeVerifier, generateCodeChallenge } from '../lib/authCreds';
+
+const buildPkceAuthUrl = async () => {
+  const codeVerifier = generateCodeVerifier();
+  localStorage.setItem('pkce_code_verifier', codeVerifier);
+  const codeChallenge = await generateCodeChallenge(codeVerifier);
+  const params = new URLSearchParams({
+    client_id: authCreds.client_id || import.meta.env.VITE_SPOTIFY_CLIENT_ID || '',
+    response_type: 'code',
+    redirect_uri: authCreds.redirect_uri || encodeURIComponent(import.meta.env.VITE_REDIRECT_URI || 'http://localhost:3000/callback'),
+    code_challenge_method: 'S256',
+    code_challenge: codeChallenge,
+    state: authCreds.state,
+    scope: authCreds.scope,
+    show_dialog: 'true'
+  });
+  return `${authCreds.auth_endpoint}?${params.toString()}`;
+};
 
 const Login: React.FC = () => {
   return (
@@ -36,18 +53,7 @@ const Login: React.FC = () => {
         <p className="text-[#a0a0a0] mb-8 text-lg">Control your Spotify playback with hand gestures. Connect your Spotify account to get started.</p>
 
         <motion.button
-          onClick={async () => {
-            try {
-              const url = await buildPkceAuthUrl();
-              if (!url.includes('client_id=') || !url.includes('redirect_uri=')) {
-                console.error('[Login] Built auth URL missing required params', { url });
-                return;
-              }
-              window.location.href = url;
-            } catch (e) {
-              console.error('[Login] Failed to build PKCE auth URL', e);
-            }
-          }}
+          onClick={async () => { const url = await buildPkceAuthUrl(); window.location.href = url; }}
           className="group relative w-full bg-gradient-to-r from-[#1DB954] to-[#1ed760] text-white font-bold py-4 px-8 rounded-lg hover:shadow-lg transition-all duration-300 flex items-center justify-center"
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
