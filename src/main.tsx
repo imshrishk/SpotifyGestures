@@ -1,8 +1,12 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { inject } from '@vercel/analytics';
 import App from './App.tsx';
 import './index.css';
 import { initializeTokenRefresh } from './lib/tokenRefresh';
+
+// Initialize Vercel Web Analytics on the client side
+inject();
 
 // Check environment variables
 console.log('Environment Variables Check:');
