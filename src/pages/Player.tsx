@@ -2,13 +2,11 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import NowPlaying from '../components/NowPlaying';
 import Queue from '../components/Queue';
-import SongRecommendations from '../components/SongRecommendations';
 import GestureControl from '../components/GestureControl';
 import UserProfile from '../components/UserProfile';
 import EnhancedLyricsDisplay from '../components/EnhancedLyricsDisplay';
 import TrackGenres from '../components/TrackGenres';
 import ExploreRecommendations from '../components/ExploreRecommendations';
-import MonitoringDashboard from '../components/MonitoringDashboard';
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { getCurrentTrack, getQueue, playPause, nextTrack, previousTrack, setVolume, getAudioAnalysis } from '../lib/spotify';
 import { AlertCircle, Loader2, Music2, Keyboard, Sparkles } from 'lucide-react';
@@ -29,9 +27,8 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
     setVolume: updateVolume,
     setAudioFeatures,
     setAudioAnalysis,
-    isAuthenticated,
-    user,
-    rehydrated
+    isAuthenticated
+    , rehydrated
   } = useSpotifyStore();
   const [isLoading, setIsLoading] = useState(true);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
@@ -140,7 +137,7 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
         let trackResponse = null;
         let queueResponse = null;
         try {
-          trackResponse = await getCurrentTrack(user?.id);
+          trackResponse = await getCurrentTrack();
         } catch (err) {
           // If Spotify rate-limited us, back off longer before retrying
           const msg = err instanceof Error ? err.message : String(err);
@@ -156,20 +153,18 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
         }
 
         try {
-          queueResponse = await getQueue(user?.id);
+          queueResponse = await getQueue();
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           const maybeErr2 = err as unknown;
-          if (/429|Too Many Requests|Rate limited|Circuit breaker/i.test(msg) || (typeof maybeErr2 === 'object' && maybeErr2 !== null && 'status' in (maybeErr2 as Record<string, unknown>) && typeof (maybeErr2 as Record<string, unknown>).status === 'number' && (maybeErr2 as Record<string, number>).status === 429)) {
+          if (/429|Too Many Requests|Rate limited/i.test(msg) || (typeof maybeErr2 === 'object' && maybeErr2 !== null && 'status' in (maybeErr2 as Record<string, unknown>) && typeof (maybeErr2 as Record<string, unknown>).status === 'number' && (maybeErr2 as Record<string, number>).status === 429)) {
             console.warn('[Player] rate limited when fetching queue, backing off for', REFRESH_BACKOFF_ON_RATE_LIMIT_MS, 'ms');
             setIsLoading(false);
             setIsInitialLoad(false);
             setTimeout(updatePlayerState, REFRESH_BACKOFF_ON_RATE_LIMIT_MS);
             return;
           }
-          // For other queue errors, just log and continue without queue data
-          console.warn('[Player] Failed to fetch queue, continuing without queue data:', msg);
-          queueResponse = { queue: [], currently_playing: null };
+          throw err;
         }
 
         if (trackResponse?.item) {
@@ -195,20 +190,14 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
         if (error instanceof Error && error.message === 'Token expired') return;
 
         const msg = error instanceof Error ? error.message : String(error);
-        const maybeError = error as unknown;
-        if (/429|Too Many Requests|Rate limited|Circuit breaker/i.test(msg) || (typeof maybeError === 'object' && maybeError !== null && 'status' in (maybeError as Record<string, unknown>) && typeof (maybeError as Record<string, unknown>).status === 'number' && (maybeError as Record<string, number>).status === 429)) {
+  const maybeError = error as unknown;
+  if (/429|Too Many Requests|Rate limited/i.test(msg) || (typeof maybeError === 'object' && maybeError !== null && 'status' in (maybeError as Record<string, unknown>) && typeof (maybeError as Record<string, unknown>).status === 'number' && (maybeError as Record<string, number>).status === 429)) {
           console.warn('[Player] detected rate limit error, backing off for', REFRESH_BACKOFF_ON_RATE_LIMIT_MS, 'ms');
           setIsLoading(false);
           setIsInitialLoad(false);
           setTimeout(updatePlayerState, REFRESH_BACKOFF_ON_RATE_LIMIT_MS);
           return;
         }
-
-        // For other errors, show a non-blocking warning and continue
-        console.warn('[Player] Non-critical error, continuing with limited functionality:', msg);
-        setIsLoading(false);
-        setIsInitialLoad(false);
-        setError(`Limited functionality: ${msg}`);
 
         // Track transient failures without triggering re-renders
         try {
@@ -521,29 +510,29 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
             <NowPlaying albumArtRef={albumArtRef} />
             <TrackGenres onGenreClick={(genre) => { selectedGenreRef.current = genre; }} />
             {/* Recommendations Tabs */}
-            <div className="mb-3 flex items-center gap-2">
-              <div className="flex bg-white/10 rounded-lg p-1">
+            <div className="mb-2">
+              <div className="flex space-x-2">
                 <button
                   onClick={() => setActiveTab('standard')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium flex items-center ${
+                  className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center ${
                     activeTab === 'standard'
                       ? 'bg-green-500 text-white'
-                      : 'text-white hover:bg-white/20'
+                      : 'bg-white/10 text-white hover:bg-white/20'
                   }`}
                 >
                   <Music2 className="w-4 h-4 mr-2" />
-                  Queue
+                  Quick Recommendations
                 </button>
                 <button
                   onClick={() => setActiveTab('explore')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium flex items-center ${
+                  className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center ${
                     activeTab === 'explore'
                       ? 'bg-green-500 text-white'
-                      : 'text-white hover:bg-white/20'
+                      : 'bg-white/10 text-white hover:bg-white/20'
                   }`}
                 >
                   <Sparkles className="w-4 h-4 mr-2" />
-                  Recommendations
+                  Explore Deep
                 </button>
               </div>
             </div>
@@ -560,9 +549,6 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
                     className="flex-1 flex flex-col"
                   >
                     <Queue />
-                    <div className="mt-4">
-                      
-                    </div>
                   </motion.div>
                 ) : (
                   <motion.div
@@ -573,9 +559,6 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
                     transition={{ duration: 0.2 }}
                   >
                     <ExploreRecommendations />
-                    <div className="mt-4">
-                      <SongRecommendations seedGenre={selectedGenreRef.current || undefined} />
-                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -600,9 +583,6 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
           </AnimatePresence>
         </div>
       </div>
-      
-      {/* System Monitoring Dashboard */}
-      <MonitoringDashboard />
     </motion.div>
   );
 };

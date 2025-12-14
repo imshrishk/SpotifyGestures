@@ -4,9 +4,9 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { getSystemStats, getUserRateLimitStatus } from '../lib/spotify';
+import { getSystemStats } from '../lib/spotify';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Activity, Users, Database, Zap, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Activity, Users, Database, Zap } from 'lucide-react';
 
 interface SystemStats {
   rateLimiter: {
@@ -79,12 +79,7 @@ const MonitoringDashboard: React.FC = () => {
     return value < threshold ? 'text-green-500' : value > threshold * 1.5 ? 'text-red-500' : 'text-yellow-500';
   };
 
-  const getStatusIcon = (value: number, threshold: number, reverse = false) => {
-    if (reverse) {
-      return value < threshold ? CheckCircle : value > threshold * 1.5 ? AlertTriangle : Activity;
-    }
-    return value < threshold ? CheckCircle : value > threshold * 1.5 ? AlertTriangle : Activity;
-  };
+  // Removed getStatusIcon (unused) to satisfy linter
 
   if (!stats) {
     return (
