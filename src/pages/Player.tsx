@@ -6,24 +6,24 @@ import GestureControl from '../components/GestureControl';
 import UserProfile from '../components/UserProfile';
 import EnhancedLyricsDisplay from '../components/EnhancedLyricsDisplay';
 import TrackGenres from '../components/TrackGenres';
-import ExploreRecommendations from '../components/ExploreRecommendations';
+
 import useSpotifyStore from '../stores/useSpotifyStore';
 import { getCurrentTrack, getQueue, playPause, nextTrack, previousTrack, setVolume, getAudioAnalysis } from '../lib/spotify';
-import { AlertCircle, Loader2, Music2, Keyboard, Sparkles } from 'lucide-react';
+import { AlertCircle, Loader2, Music2, Keyboard, Sparkles, List } from 'lucide-react';
 import { extractDominantColor } from '../lib/colorExtractor';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) => {
   const navigate = useNavigate();
   const {
-    error, 
-    currentTrack, 
-    setCurrentTrack, 
-    setQueue, 
-    setError, 
-    setIsPlaying, 
-    isPlaying, 
-    volume, 
+    error,
+    currentTrack,
+    setCurrentTrack,
+    setQueue,
+    setError,
+    setIsPlaying,
+    isPlaying,
+    volume,
     setVolume: updateVolume,
     setAudioFeatures,
     setAudioAnalysis,
@@ -180,18 +180,18 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
         if (queueResponse?.queue) setQueue(queueResponse.queue);
         else setQueue([]);
 
-  setIsLoading(false);
-  setIsInitialLoad(false);
-  setRetryCount(0);
-  consecutiveFailuresRef.current = 0;
-  setError(null);
+        setIsLoading(false);
+        setIsInitialLoad(false);
+        setRetryCount(0);
+        consecutiveFailuresRef.current = 0;
+        setError(null);
       } catch (error) {
         console.error('Error updating player state:', error);
         if (error instanceof Error && error.message === 'Token expired') return;
 
         const msg = error instanceof Error ? error.message : String(error);
-  const maybeError = error as unknown;
-  if (/429|Too Many Requests|Rate limited/i.test(msg) || (typeof maybeError === 'object' && maybeError !== null && 'status' in (maybeError as Record<string, unknown>) && typeof (maybeError as Record<string, unknown>).status === 'number' && (maybeError as Record<string, number>).status === 429)) {
+        const maybeError = error as unknown;
+        if (/429|Too Many Requests|Rate limited/i.test(msg) || (typeof maybeError === 'object' && maybeError !== null && 'status' in (maybeError as Record<string, unknown>) && typeof (maybeError as Record<string, unknown>).status === 'number' && (maybeError as Record<string, number>).status === 429)) {
           console.warn('[Player] detected rate limit error, backing off for', REFRESH_BACKOFF_ON_RATE_LIMIT_MS, 'ms');
           setIsLoading(false);
           setIsInitialLoad(false);
@@ -255,7 +255,7 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
       if (currentTrack?.album?.images?.[0]?.url) {
         try {
           const dominantColor = await extractDominantColor(currentTrack.album.images[0].url);
-          
+
           if (dominantColor) {
             const [r, g, b] = dominantColor;
             setBackgroundColor(`rgb(${r}, ${g}, ${b})`);
@@ -265,7 +265,7 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
         }
       }
     };
-    
+
     extractColors();
   }, [currentTrack]);
 
@@ -273,11 +273,11 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
   useEffect(() => {
     const fetchAudioData = async () => {
       if (!currentTrack?.id || !isAuthenticated()) return;
-      
+
       try {
         // Fetch audio features and analysis in one call
         const audioData = await getAudioAnalysis(currentTrack.id);
-        
+
         // We now always have some data structure even on errors
         if (audioData) {
           // Set audio features
@@ -291,7 +291,7 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
             speechiness: audioData.features?.speechiness ?? 0.5,
             instrumentalness: audioData.features?.instrumentalness ?? 0.5
           });
-          
+
           // Set audio analysis
           setAudioAnalysis({
             beats: audioData.analysis?.beats ?? [],
@@ -312,7 +312,7 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
             speechiness: 0.5,
             instrumentalness: 0.5
           });
-          
+
           setAudioAnalysis({
             beats: [],
             bars: [],
@@ -334,7 +334,7 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
           speechiness: 0.5,
           instrumentalness: 0.5
         });
-        
+
         setAudioAnalysis({
           beats: [],
           bars: [],
@@ -344,16 +344,16 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
         });
       }
     };
-    
+
     fetchAudioData();
   }, [currentTrack, isAuthenticated, setAudioFeatures, setAudioAnalysis]);
 
-  
+
 
   if (isLoading) {
     return (
       <div className="min-h-screen bg-light dark:bg-dark flex items-center justify-center">
-        <motion.div 
+        <motion.div
           className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-8 flex flex-col items-center"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -371,7 +371,7 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
   if (error) {
     return (
       <div className="min-h-screen bg-light dark:bg-dark flex items-center justify-center">
-        <motion.div 
+        <motion.div
           className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-8 flex flex-col items-center"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -379,7 +379,7 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
         >
           <AlertCircle className="w-8 h-8 text-red-500 mb-4" />
           <div className="text-gray-800 dark:text-white text-lg font-medium">{error}</div>
-          <button 
+          <button
             onClick={() => window.location.reload()}
             className="mt-4 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
           >
@@ -391,7 +391,7 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
   }
 
   return (
-    <motion.div 
+    <motion.div
       className="min-h-screen p-4 md:p-8 transition-colors duration-500 overflow-hidden relative"
       style={{ backgroundColor }}
       initial={{ opacity: 0 }}
@@ -409,25 +409,23 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={() => setShowLyrics(!showLyrics)}
-              className={`p-2 rounded-full ${
-                showLyrics 
-                  ? 'bg-green-500 text-white' 
-                  : 'bg-white/10 text-white hover:bg-white/20'
-              } transition-colors`}
+              className={`p-2 rounded-full ${showLyrics
+                ? 'bg-green-500 text-white'
+                : 'bg-white/10 text-white hover:bg-white/20'
+                } transition-colors`}
               title="Toggle lyrics (L)"
             >
               <Music2 className="w-5 h-5" />
             </motion.button>
-            
+
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={() => setShowKeyboardShortcuts(!showKeyboardShortcuts)}
-              className={`p-2 rounded-full ${
-                showKeyboardShortcuts 
-                  ? 'bg-green-500 text-white' 
-                  : 'bg-white/10 text-white hover:bg-white/20'
-              } transition-colors`}
+              className={`p-2 rounded-full ${showKeyboardShortcuts
+                ? 'bg-green-500 text-white'
+                : 'bg-white/10 text-white hover:bg-white/20'
+                } transition-colors`}
               title="Keyboard shortcuts (K)"
             >
               <Keyboard className="w-5 h-5" />
@@ -509,27 +507,22 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
           <div className="flex-1 flex flex-col h-full">
             <NowPlaying albumArtRef={albumArtRef} />
             <TrackGenres onGenreClick={(genre) => { selectedGenreRef.current = genre; }} />
-            {/* Recommendations Tabs */}
+            {/* Navigation Buttons */}
             <div className="mb-2">
               <div className="flex space-x-2">
                 <button
                   onClick={() => setActiveTab('standard')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center ${
-                    activeTab === 'standard'
-                      ? 'bg-green-500 text-white'
-                      : 'bg-white/10 text-white hover:bg-white/20'
-                  }`}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center ${activeTab === 'standard'
+                    ? 'bg-green-500 text-white'
+                    : 'bg-white/10 text-white hover:bg-white/20'
+                    }`}
                 >
-                  <Music2 className="w-4 h-4 mr-2" />
-                  Quick Recommendations
+                  <List className="w-4 h-4 mr-2" />
+                  Queue
                 </button>
                 <button
-                  onClick={() => setActiveTab('explore')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center ${
-                    activeTab === 'explore'
-                      ? 'bg-green-500 text-white'
-                      : 'bg-white/10 text-white hover:bg-white/20'
-                  }`}
+                  onClick={() => navigate('/explore')}
+                  className="px-4 py-2 rounded-lg text-sm font-medium flex items-center bg-white/10 text-white hover:bg-white/20 transition-colors"
                 >
                   <Sparkles className="w-4 h-4 mr-2" />
                   Explore Deep
@@ -539,28 +532,16 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
             {/* Tab Content */}
             <div className="flex-1 min-h-0 flex flex-col">
               <AnimatePresence>
-                {activeTab === 'standard' ? (
-                  <motion.div
-                    key="standard"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="flex-1 flex flex-col"
-                  >
-                    <Queue />
-                  </motion.div>
-                ) : (
-                  <motion.div
-                    key="explore"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    <ExploreRecommendations />
-                  </motion.div>
-                )}
+                <motion.div
+                  key="standard"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex-1 flex flex-col"
+                >
+                  <Queue />
+                </motion.div>
               </AnimatePresence>
             </div>
             <div className="mt-6">
@@ -570,7 +551,7 @@ const Player: React.FC<{ previewMode?: boolean }> = ({ previewMode = false }) =>
 
           <AnimatePresence>
             {showLyrics && (
-              <motion.div 
+              <motion.div
                 className="w-full lg:w-[400px]"
                 initial={{ opacity: 0, x: 50 }}
                 animate={{ opacity: 1, x: 0 }}
