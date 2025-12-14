@@ -652,11 +652,12 @@ export const getRecommendations = async (
       });
     }
 
-    const uniqueArtistIds = Array.from(artistIds).slice(0, 5); // Limit to 5 artists
+    const uniqueArtistIds = Array.from(artistIds).slice(0, 25); // Limit to 25 artists
     const candidates = new Map<string, any>();
 
     // 2. Fetch Top Tracks for each Artist
     // This gives us "Similar" vibed tracks (the artist's best work)
+    // We batch this if needed, but for 25 artists, 25 requests is okay-ish parallel or we can limit concurrent
     await Promise.all(uniqueArtistIds.map(async (artistId) => {
       try {
         const res = await fetch(`https://api.spotify.com/v1/artists/${artistId}/top-tracks?market=from_token`, {

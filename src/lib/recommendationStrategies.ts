@@ -152,21 +152,88 @@ export async function getFamiliarSlab(
 }
 
 
+
+// Helper with Local Strategy because /recommendations is broken
 async function fetchRecommendations(token: string, params: Record<string, string | number>): Promise<SpotifyApi.TrackObjectFull[]> {
     try {
-        const query = new URLSearchParams();
-        Object.entries(params).forEach(([k, v]) => query.append(k, String(v)));
+        console.log('[fetchRecommendations] Using Local Strategy for slab:', params);
 
-        const url = `https://api.spotify.com/v1/recommendations?${query.toString()}`;
-        console.log('[fetchRecommendations] Fetching:', url);
+        const candidates = new Map<string, any>();
 
-        const res = await fetch(url, {
-            headers: { Authorization: `Bearer ${token}` }
-        });
+        // 1. Handle Seed Artists (Familiar Slab)
+        if (params.seed_artists) {
+            const artistIds = String(params.seed_artists).split(',');
+            await Promise.all(artistIds.map(async (id) => {
+                try {
+                    const res = await fetch(`https://api.spotify.com/v1/artists/${id}/top-tracks?market=from_token`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        (data.tracks || []).slice(0, 5).forEach((t: any) => candidates.set(t.id, t));
+                    }
+                } catch (e) { }
+            }));
+        }
 
-        if (!res.ok) return [];
-        const data = await res.json();
-        return data.tracks || [];
+        // 2. Handle Seed Genres (Discovery Slab, Mood Slab Fallback)
+        if (params.seed_genres) {
+            const genres = String(params.seed_genres).split(',');
+            // Pick rand genre
+            const genre = genres[Math.floor(Math.random() * genres.length)];
+            const searchLimit = Number(params.limit) || 10;
+
+            try {
+                const res = await fetch(`https://api.spotify.com/v1/search?q=genre:"${encodeURIComponent(genre)}"&type=track&limit=${searchLimit}`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    (data.tracks?.items || []).forEach((t: any) => candidates.set(t.id, t));
+                }
+            } catch (e) { }
+        }
+
+        // 3. Handle Seed Tracks (Mood Slab)
+        // If we have seed_tracks but no artists, we should fetch artists from these tracks
+        if (params.seed_tracks && !params.seed_artists) {
+            const trackIds = String(params.seed_tracks).split(',');
+            const tracksMeta = await Promise.all(
+                trackIds.slice(0, 3).map(id =>
+                    fetch(`https://api.spotify.com/v1/tracks/${id}`, { headers: { Authorization: `Bearer ${token}` } })
+                        .then(r => r.json())
+                        .catch(() => null)
+                )
+            );
+
+            const derivedArtists = new Set<string>();
+            tracksMeta.forEach((t: any) => {
+                if (t && t.artists) t.artists.forEach((a: any) => derivedArtists.add(a.id));
+            });
+
+            const artists = Array.from(derivedArtists).slice(0, 5);
+            await Promise.all(artists.map(async (id) => {
+                try {
+                    const res = await fetch(`https://api.spotify.com/v1/artists/${id}/top-tracks?market=from_token`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        (data.tracks || []).slice(0, 5).forEach((t: any) => candidates.set(t.id, t));
+                    }
+                } catch (e) { }
+            }));
+        }
+
+        let results = Array.from(candidates.values());
+
+        // Shuffle
+        results = results.sort(() => 0.5 - Math.random());
+
+        // Limit
+        const limit = Number(params.limit) || 20;
+        return results.slice(0, limit);
+
     } catch (e) {
         console.error('[fetchRecommendations] Error:', e);
         return [];

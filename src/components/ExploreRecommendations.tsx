@@ -113,8 +113,8 @@ const ExploreRecommendations: React.FC = () => {
         if (selectedItems.some(selected => selected.id === item.id)) {
             setSelectedItems(selectedItems.filter(selected => selected.id !== item.id));
         } else {
-            // Allow any number of seeds, but Spotify generally limits to 5 total seeds for recommendations
-            if (selectedItems.length >= 5) {
+            // Allow up to 25 seeds for local strategy
+            if (selectedItems.length >= 25) {
                 // Optional: show warning or just don't add
                 return;
             }
@@ -418,8 +418,8 @@ const ExploreRecommendations: React.FC = () => {
                             key={range.value}
                             onClick={() => handleTimeRangeChange(range.value as any)}
                             className={`px-3 py-2 rounded-lg text-sm font-medium flex-1 ${timeRange === range.value
-                                    ? 'bg-green-500 text-white'
-                                    : 'text-gray-400 hover:text-white hover:bg-white/10'
+                                ? 'bg-green-500 text-white'
+                                : 'text-gray-400 hover:text-white hover:bg-white/10'
                                 }`}
                         >
                             {range.label}
@@ -481,8 +481,8 @@ const ExploreRecommendations: React.FC = () => {
                                 getRecommendationsForCurrentSeed();
                             }}
                             className={`px-4 py-2 rounded-lg text-sm font-medium ${currentSeed === 'current'
-                                    ? 'bg-green-500 text-white'
-                                    : 'bg-white/10 text-white hover:bg-white/20'
+                                ? 'bg-green-500 text-white'
+                                : 'bg-white/10 text-white hover:bg-white/20'
                                 }`}
                             disabled={!currentTrack?.id}
                         >
@@ -495,8 +495,8 @@ const ExploreRecommendations: React.FC = () => {
                                 getRecommendationsForCurrentSeed();
                             }}
                             className={`px-4 py-2 rounded-lg text-sm font-medium ${currentSeed === 'selected'
-                                    ? 'bg-green-500 text-white'
-                                    : 'bg-white/10 text-white hover:bg-white/20'
+                                ? 'bg-green-500 text-white'
+                                : 'bg-white/10 text-white hover:bg-white/20'
                                 }`}
 
                         >
@@ -600,8 +600,8 @@ const ExploreRecommendations: React.FC = () => {
                                         <div
                                             key={artist.id}
                                             className={`flex items-center p-2 rounded-lg cursor-pointer ${selectedItems.some(item => item.id === artist.id)
-                                                    ? 'bg-green-500/30'
-                                                    : 'bg-black/30 hover:bg-white/10'
+                                                ? 'bg-green-500/30'
+                                                : 'bg-black/30 hover:bg-white/10'
                                                 }`}
                                             onClick={() => toggleSelectedItem(artist)}
                                         >
@@ -633,8 +633,8 @@ const ExploreRecommendations: React.FC = () => {
                                         <div
                                             key={track.id}
                                             className={`flex items-center p-2 rounded-lg cursor-pointer ${selectedItems.some(item => item.id === track.id)
-                                                    ? 'bg-green-500/30'
-                                                    : 'bg-black/30 hover:bg-white/10'
+                                                ? 'bg-green-500/30'
+                                                : 'bg-black/30 hover:bg-white/10'
                                                 }`}
                                             onClick={() => toggleSelectedItem(track)}
                                         >
