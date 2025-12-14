@@ -90,7 +90,7 @@ export async function getDiscoverySlab(
         limit: 10,
         target_popularity: 35, // Low popularity for "Deep" discovery
         min_popularity: 0,
-        max_popularity: 60,
+        // Removed max_popularity to avoid 0 results
     };
 
     const tracks = await fetchRecommendations(token, params);
@@ -157,7 +157,10 @@ async function fetchRecommendations(token: string, params: Record<string, string
         const query = new URLSearchParams();
         Object.entries(params).forEach(([k, v]) => query.append(k, String(v)));
 
-        const res = await fetch(`https://api.spotify.com/v1/recommendations?${query.toString()}`, {
+        const url = `https://api.spotify.com/v1/recommendations?${query.toString()}`;
+        console.log('[fetchRecommendations] Fetching:', url);
+
+        const res = await fetch(url, {
             headers: { Authorization: `Bearer ${token}` }
         });
 

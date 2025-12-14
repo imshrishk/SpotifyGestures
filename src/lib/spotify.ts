@@ -607,7 +607,7 @@ export const getMultiSlabRecommendations = async (): Promise<RecommendationSlab[
     if (slabs.length === 0) {
       console.warn('[getMultiSlabRecommendations] All strategies failed or returned empty. Using emergency fallback.');
       try {
-        const fallback = await getDiscoverySlab(token, ['pop', 'dance', 'hits'], []);
+        const fallback = await getDiscoverySlab(token, ['pop', 'dance', 'electronic'], []);
         if (fallback.tracks.length > 0) {
           fallback.label = 'Popular Right Now';
           fallback.description = 'Fresh hits for you';
@@ -628,35 +628,89 @@ export const getMultiSlabRecommendations = async (): Promise<RecommendationSlab[
 
 // Deprecated: kept for backward compatibility if needed, but redirects to mood strategy or user profile
 // Restoration of proper parametric recommendations
+// Deprecated endpoint replacement: manually build recommendations
 export const getRecommendations = async (
   seedTracks: string[] = [],
   seedArtists: string[] = [],
   seedGenres: string[] = []
 ) => {
+  console.log('[getRecommendations] Using local strategy (API deprecated)...');
   const token = await ensureValidToken();
   if (!token) return { tracks: [] };
 
   try {
-    const params = new URLSearchParams();
-    if (seedTracks.length) params.append('seed_tracks', seedTracks.join(','));
-    if (seedArtists.length) params.append('seed_artists', seedArtists.join(','));
-    if (seedGenres.length) params.append('seed_genres', seedGenres.join(','));
+    // 1. Gather Artist IDs
+    const artistIds = new Set<string>(seedArtists);
 
-    // Defaults for better results
-    params.append('limit', '20');
-    params.append('min_popularity', '20');
-
-    const res = await fetch(`https://api.spotify.com/v1/recommendations?${params.toString()}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-
-    if (!res.ok) {
-      console.error('[getRecommendations] API Error', res.status, await res.text());
-      return { tracks: [] };
+    // fetch artists from seed tracks if needed
+    if (seedTracks.length > 0) {
+      const tracksData = await Promise.all(
+        seedTracks.slice(0, 3).map(id => spotify.getTrack(id).catch(() => null))
+      );
+      tracksData.forEach(t => {
+        if (t && t.artists) t.artists.forEach(a => artistIds.add(a.id));
+      });
     }
 
-    const data = await res.json();
-    return data;
+    const uniqueArtistIds = Array.from(artistIds).slice(0, 5); // Limit to 5 artists
+    const candidates = new Map<string, any>();
+
+    // 2. Fetch Top Tracks for each Artist
+    // This gives us "Similar" vibed tracks (the artist's best work)
+    await Promise.all(uniqueArtistIds.map(async (artistId) => {
+      try {
+        const res = await fetch(`https://api.spotify.com/v1/artists/${artistId}/top-tracks?market=from_token`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          // Add up to 5 tracks per artist
+          (data.tracks || []).slice(0, 5).forEach((t: any) => candidates.set(t.id, t));
+        }
+      } catch (e) {
+        console.warn(`[getRecommendations] Failed to fetch top tracks for ${artistId}`, e);
+      }
+    }));
+
+    // 3. Search for tracks by Genre (if provided)
+    if (seedGenres.length > 0) {
+      // Pick 2 random genres if many are provided
+      const usedGenres = seedGenres.sort(() => 0.5 - Math.random()).slice(0, 2);
+      await Promise.all(usedGenres.map(async (genre) => {
+        try {
+          const res = await fetch(`https://api.spotify.com/v1/search?q=genre:"${encodeURIComponent(genre)}"&type=track&limit=10`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            (data.tracks?.items || []).forEach((t: any) => candidates.set(t.id, t));
+          }
+        } catch (e) {
+          console.warn(`[getRecommendations] Failed to search genre ${genre}`, e);
+        }
+      }));
+    }
+
+    // 4. Fallback if empty: Popular tracks
+    if (candidates.size === 0) {
+      console.log('[getRecommendations] No candidates found, using global fallback');
+      const res = await fetch(`https://api.spotify.com/v1/playlists/37i9dQZEVXbMDoHDwVN2tF/tracks?limit=20`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        data.items?.forEach((item: any) => {
+          if (item.track) candidates.set(item.track.id, item.track);
+        });
+      }
+    }
+
+    // 5. Shuffle and Return
+    const allTracks = Array.from(candidates.values());
+    const shuffled = allTracks.sort(() => 0.5 - Math.random()).slice(0, 20);
+
+    return { tracks: shuffled };
+
   } catch (e) {
     console.error('[getRecommendations] Failed:', e);
     return { tracks: [] };
